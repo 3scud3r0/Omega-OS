@@ -10,7 +10,12 @@ SECTIONS {
  .data : { *(.data .data.*) } :data
  . = ALIGN(4096);
  __bss_start = .;
- .bss (NOLOAD) : { *(.bss.boot) *(.bss .bss.*) *(COMMON) } :data
+ .bss (NOLOAD) : {
+  *(.bss.boot)
+  . = ALIGN(4096); *(.bss.idt)
+  . = ALIGN(4096); *(.bss.dma)
+  *(.bss .bss.*) *(COMMON)
+ } :data
  . = ALIGN(4096);
  __kernel_end = .;
  /DISCARD/ : { *(.eh_frame*) *(.comment) *(.note*) }

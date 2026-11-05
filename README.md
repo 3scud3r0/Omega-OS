@@ -1,104 +1,139 @@
-# Omega-OS
+# Omega-OS — núcleo experimental V1
 
-Nanokernel experimental **x86-64**, modular, C99 freestanding, sem libc ou
-alocação de heap. A especificação modular final tem precedência sobre o pedido
-inicial de arquivo único. Todos os fontes também estão reunidos em
-`omega_os_fontes.txt` (`make bundle`).
+Kernel x86-64 modular C99 freestanding, sem libc, heap ou dependências de runtime.
+Esta fase acrescenta hardware real ao protótipo: IDT/TSS, contextos de teste em
+Ring 3, armazenamento VirtIO PCI por DMA e um Application Processor iniciado
+por INIT-SIPI-SIPI. Não é um sistema industrial certificado.
 
-## Compilar e executar
+## Build e execução
 
-Pré-requisitos: GCC x86-64, GNU binutils, Make, QEMU x86; Python 3 para testes.
-Em Debian: `apt-get install gcc binutils make qemu-system-x86 python3`.
+Pré-requisitos do host: GCC x86-64, GNU binutils, Make, Python 3 e QEMU x86.
+`qemu-img` é usado se disponível; o fallback Python cria a mesma imagem raw de
+32 MiB com leitura inicial em zeros. A imagem existente nunca é recriada por
+`make` ou removida por `make clean`.
 
 ```sh
 make -j2
-qemu-system-x86_64 -kernel omega_os.elf -serial stdio -display none
+make run
+# equivalente:
+qemu-system-x86_64 -kernel omega_os.elf \
+  -drive file=disk.img,if=virtio,format=raw \
+  -smp 2 -m 128M -serial stdio -display none
 make test
 make test-host
 make bundle
 ```
 
-Um cross-compiler pode ser selecionado com `make CC=x86_64-elf-gcc
-OBJCOPY=x86_64-elf-objcopy`. O build foi validado com GCC 14.2.0 (Debian), LTO,
-`-Wall -Wextra -Werror -pedantic`, e QEMU 10.0.13 (TCG).
-Não foi validado um cross-compiler `x86_64-elf-gcc` neste ambiente.
+No ambiente atual, use `QEMU=/workspace/tools/bin/qemu-system-x86_64` nos alvos
+`run` e `test`. QEMU foi instalado localmente a partir de pacotes Debian
+verificados, sem sudo. Reutilize o checkout existente; não crie worktrees para
+executar ou validar este kernel.
 
-No ambiente desta implementação, QEMU foi extraído de pacotes Debian assinados
-em `/workspace/tools/qemu` por não haver sudo. Use
-`make test QEMU=/workspace/tools/bin/qemu-system-x86_64` e o mesmo override para
-`make run`. Essa instalação local é externa ao repositório.
+O Makefile mantém `-O3 -flto -Wall -Wextra -Werror -pedantic`, `-nostdlib`,
+`-ffreestanding -fno-builtin -mno-red-zone` e proíbe geração de instruções SIMD
+nos handlers. Build validado com GCC 14.2 e QEMU 10.0.13/TCG multithread.
+O cross-compiler é selecionável com `CC=x86_64-elf-gcc
+OBJCOPY=x86_64-elf-objcopy`; esse cross-compiler não foi testado nesta máquina.
 
-O cabeçalho Multiboot 1 fica no offset 4096, dentro dos primeiros 8 KiB.
-`link.ld` organiza um ELF64 intermediário com código carregado em 0x100000.
-`objcopy -O elf32-i386` produz o contêiner ELF32 aceito pelo loader Multiboot do
-QEMU; não converte as instruções x86-64. `_start` executa código de 32 bits,
-zera BSS, instala GDT e quatro níveis de paginação e habilita long mode antes
-de chamar C com pilha alinhada de 16 KiB. Compilar somente com `-Ttext`, sem
-este script e conversão, não reproduz esse caminho de boot.
+O ELF64 intermediário é convertido em contêiner ELF32 para o loader Multiboot 1
+com `-kernel`. Isso não converte o código de 64 bits: a entrada `.code32` instala
+paginação/GDT e habilita long mode. Cabeçalho no offset 4096, entrada em 1 MiB,
+BSS zerada explicitamente e pilha inicial de 16 KiB. O linker reserva alinhamento
+de página para DMA e IDT.
 
-## Subsistemas
+## Hardware implementado
 
-- UART 16550 COM1: 115200 baud, 8N1, polling; texto, hexadecimal e decimal.
-- PMM: limite de 64 MiB, frames de 4096 bytes; bitmap hierárquico de três níveis
-  com bit-scan, seleção em tempo constante; reservas até o fim do kernel,
-  limite de RAM Multiboot, rejeição de double-free. Executado apenas no BSP.
-- MMU: identity mapping de 64 MiB com páginas de 4 KiB e aliases SLS em 1 GiB.
-  `mmu_map` aceita endereços inferiores canônicos, páginas dentro dos 64 MiB e
-  flags present/write. Frames de page tables são obtidos do PMM. Falta de
-  memória pode deixar tabelas intermediárias vazias alocadas; retorna falha.
-- SLS experimental: varredura real de PTEs, detecção/limpeza de bit dirty e
-  `invlpg`. Checkpoints de tarefas copiam frames completos para frames de RAM.
-  Commit e rollback são transações cooperativas de um processador, sem escrita
-  concorrente durante a cópia. **Limpar dirty não persiste dados.** Não há SSD,
-  NVRAM, journal, recuperação de energia ou atomicidade entre CPUs.
-- SPSC: 1024 slots, índices monotônicos unsigned com wrap definido, cache lines
-  separadas de 64 bytes, release/acquire. Apenas um produtor e um consumidor;
-  inicialização exige exclusividade. Testado também com duas threads no host.
-- Racionais: representação reduzida com denominador positivo; operações
-  verificam overflow e divisão por zero; comparação usa frações contínuas.
-  Overflow intermediário é rejeitado mesmo se o resultado final coubesse.
-- Contratos: norma quadrática exata <= 1 e tag SipHash-2-4 dos campos canônicos.
-  Corrupção de tag e violação de norma causam restauração do frame e quarentena.
-  O checkpoint é revalidado antes do rollback. Uma chave pública fixa de demo
-  não fornece autenticação contra um adversário com acesso ao kernel.
-  **Não há certificado Lean, verificador de prova formal ou isolamento ring 3.**
+- **IDT/TSS:** 256 gates de 16 bytes, tabela alinhada em 4096; 32 stubs de
+  exceções com salvamento dos 15 GPRs, normalização do error code, dispatcher C
+  e `iretq`. TSS e pilhas independentes por CPU; IST para NMI/double fault.
+  `#PF` lê CR2. As falhas do contexto usuário ativo restauram o frame a partir
+  do disco e colocam a tarefa em quarentena; o contexto ofensivo é abandonado.
+  Falhas inesperadas no kernel geram diagnóstico e halt.
+- **Ring 3:** seletores CS=0x23, DS=0x1b, entrada por `iretq` e RSP0 da TSS.
+  Testes reais tentam ler memória supervisor, executar OUT e ler CR3. A CPU
+  gera respectivamente #PF, #GP e #GP; os testes conferem CPL, endereço de
+  falta, erro de acesso e restauração de estado deliberadamente corrompido.
+- **PCI/VirtIO:** configuração 0xCF8/0xCFC, todos os buses/slots/functions,
+  detecção 1af4:1001, BAR I/O e Bus Master habilitados. Descriptor/avail/used
+  obedecem o layout legacy: avail logo depois dos descritores, used na próxima
+  página. Alinhar avail isoladamente a 4096 seria incorreto. A fila anunciada
+  pelo dispositivo é respeitada, de 128 até 1024 entradas, com reserva estática
+  de 32 KiB. O QEMU deste ambiente anuncia **1024 mesmo com queue-size=128**
+  no dispositivo transicional; não alegamos teste físico de uma fila de 128.
+  O ID 1042 é detectado e rejeitado com diagnóstico, pois o transporte moderno
+  PCI capabilities não está implementado.
+- **DMA:** requests IN, OUT e FLUSH com buffer físico de 4096 bytes, barreiras,
+  avail/used acquire/release e validação de completion/status. A API submit/poll
+  permite uma operação pendente; os wrappers aguardam por polling. Não há fila
+  de múltiplos requests simultâneos. FLUSH é obrigatório e negociado, FUA não
+  é negociado. A fila é BSP-only; DMA coerente x86 usa RAM normal cacheável.
+- **SMP:** procura RSDP no EBDA/BIOS, valida checksums e limites das tabelas,
+  usa XSDT ou RSDT e enumera MADT, incluindo LAPIC address override. Mapeia
+  LAPIC/ACPI acima dos 64 MiB; MMIO LAPIC usa PCD/PWT. Trampolim em 0x8000,
+  GDT de modo real/protegido/longo, CR3 compartilhado e pilha própria do AP.
+  Envia INIT assert/deassert e dois SIPIs, com delays PIT independentes de
+  frequência TSC. Verifica APIC ID do AP antes de publicar online. Suporta
+  exatamente BSP+um AP em xAPIC; x2APIC ativo ou falta de um segundo AP falham
+  explicitamente.
+- **SPSC:** BSP produz e AP consome 65.536 mensagens FIFO, com racionais e
+  contratos validados em cada CPU. Completion release/acquire torna os frames
+  quiescentes antes de commit. O AP então entra em HLT. Não há escalonamento
+  preemptivo, IRQs de dispositivos ou shootdown geral de TLB entre CPUs.
 
-## Execução e evidência
+## Persistência e contrato de recuperação
 
-O kernel executa 16 ciclos cooperativos de produtor/consumidor no BSP, testa
-corrupção e norma inválida e termina em `cli; hlt`. Não inicia APs, não executa
-simultaneamente em múltiplos cores, não instala IRQs ou IDT e não tem recuperação
-de exceções. Exige CPU x86-64 e firmware compatível com Multiboot; RISC-V não
-está implementado. Não há outros serviços ou credenciais para o kernel.
+Somente páginas explicitamente registradas no SLS são persistidas. Para cada
+uma, o disco reserva dois slots copy-on-write, cada qual com uma página de
+metadados e uma de dados. Até quatro páginas registradas; a demo usa três.
+Dados e metadados têm CRC64-ECMA. Cada commit escreve dados no slot inativo,
+executa FLUSH, escreve metadados com geração incrementada e executa outro
+FLUSH. Só então o bit dirty da PTE é limpo e a tradução é invalidada. Os buffers
+são fixos e as fontes devem permanecer quiescentes durante toda a operação.
 
-`make test` verifica o cabeçalho no arquivo e inicia de fato o QEMU, captura a
-serial em `build/boot.log` e exige que cada teste chegue a PASS e STABLE sem FAIL.
-O timeout de 12 s encerra o QEMU, pois o kernel permanece em HLT por projeto.
-Uma execução sem mensagens de estabilidade falha no teste.
+No boot/rollback, ambos os slots são lidos por VirtIO; a maior geração com CRCs
+válidos é recuperada. Um slot incompleto permite fallback para o anterior. Se
+há metadados não vazios mas nenhum checkpoint válido, o kernel falha fechado:
+não reinicializa silenciosamente o estado. O formato depende da ordem fixa de
+registro das páginas e dos respectivos endereços virtuais.
 
-`make test-host` compara 40.000 operações racionais com `fractions.Fraction`
-e transfere 1.000.000 mensagens ordenadas entre duas threads pthread. A libc
-nesses testes pertence exclusivamente ao host. O kernel não tem símbolos
-externos pendentes (`nm -u build/omega64.elf` não produz saída).
+**A atomicidade é por página.** Não há raiz transacional atômica para um grafo
+de múltiplas páginas nem recuperação de tabelas de páginas inteiras do disco.
+Uma interrupção entre commits de duas páginas pode recuperar gerações distintas.
+CRCs detectam corrupção, não autenticam adversários. Durabilidade depende da
+implementação correta de FLUSH pelo dispositivo e pelo host. SIGKILL no QEMU
+não é equivalente a desligar a alimentação física do host.
 
-Trecho observado na validação:
+Os contextos Ring 3 desta fase são testes de fronteira de privilégio. O produtor
+e consumidor cognitivos ainda executam no kernel. Não existe runtime geral de
+agentes usuários, syscall ABI, CR3 por processo, NX/W^X, Ed25519 ou verificador
+de bytecode/Lean. A tag SipHash com chave fixa permanece um detector de corrupção
+acidental, sem autenticação contra quem pode modificar o kernel.
 
-```text
-[OMEGA-OS] BOOT x86-64 / 4-level paging
-TEST rational arithmetic/overflow PASS
-TEST SPSC full/empty/FIFO/wrap PASS
-SLS dirty 0x0000000040000000 checkpoint tracking (RAM)
-SLS dirty 0x0000000040001000 checkpoint tracking (RAM)
-IPC transferred 16 messages; contracts accepted
-IMMUNE quarantine + full frame rollback id=2
-IMMUNE quarantine + full frame rollback id=1
-TEST contract/tag/norm/quarantine/frame rollback PASS
-CPU TSC cycles: 27930136
-STABLE: 16 cooperative cycles completed; RAM checkpoints only; entering HLT
-```
+## Validação reproduzível
 
-Ciclos de TSC variam por execução e incluem logs seriais. Não são necessariamente
-ciclos efetivos do core; não são convertidos em nanossegundos sem calibração.
-Não existe baseline anterior para alegar ausência de regressão de latência.
-Previsões sobre tempos de boot, taxas de branch miss, consumo, desgaste,
-convergência cognitiva ou meses de operação não foram medidas nem são garantidas.
+`make test` cria imagens isoladas em `build/`, sem modificar `disk.img` do
+usuário. Verifica cabeçalho Multiboot e executa QEMU com duas vCPUs e TCG
+multithread. Cada teste exige os eventos seriais correspondentes e termina
+com SIGKILL; timeout, FAIL ou ausência de estabilidade falham no host.
+
+A suíte verifica os bytes raw e CRCs fora do emulador, epochs de ambas as tarefas
+(65.536 no primeiro boot, 131.072 no segundo), recuperação após reinício e
+fallback após corrupção deliberada dos dados do slot mais novo. Quatro testes
+adicionais interrompem o processo após escrita de dados, FLUSH de dados,
+escrita de metadados e FLUSH de metadados. O estado novo nesses testes difere
+do anterior; somente o estado anterior ou novo completo é aceito na recuperação.
+Isso cobre fronteiras do protocolo e uma escrita rasgada induzida, não todas
+as temporizações de falha possíveis em hardware físico.
+
+A instrumentação de cortes usa `-append sls.crash=1` até `sls.crash=4`: o kernel
+pausa em HLT na fronteira indicada, e o host o mata. Não use essa opção no boot
+normal. Logs de cada execução são gravados em `build/v1-*.log`.
+
+`make test-host` conserva 40.000 verificações de aritmética contra frações exatas
+Python e 1.000.000 de mensagens entre duas threads host. A libc/pthread usada
+por esses testes não integra o binário bare-metal; `nm -u build/omega64.elf`
+não apresenta dependências externas. Telemetria TSC representa ticks medidos,
+sem conversão para nanossegundos ou garantia de ausência de regressão de latência.
+
+`make bundle` atualiza `omega_os_fontes.txt` com todos os fontes, headers,
+linker, Makefile, documentação e testes.
