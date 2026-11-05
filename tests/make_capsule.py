@@ -20,3 +20,11 @@ run(['openssl','pkeyutl','-sign','-rawin','-inkey',str(key),'-in','build/capsule
 pub=(b/'authority.der').read_bytes()[-32:]
 def c_array(name,data): return 'static const unsigned char '+name+'[] = {'+','.join(str(x) for x in data)+'};\n'
 (b/'capsule.h').write_text(c_array('authority_public',pub)+c_array('capsule_signature',(b/'capsule.sig').read_bytes())+c_array('capsule_message',message))
+
+compiler=(b/'compiler.elf').read_bytes()
+assert len(compiler)<=256*1024
+message=b'OMEGA-COMPILER3\0'+struct.pack('<II',len(compiler),len(vm))+compiler+vm
+(b/'compiler.msg').write_bytes(message)
+run(['openssl','pkeyutl','-sign','-rawin','-inkey',str(key),'-in','build/compiler.msg','-out','build/compiler.sig'])
+with (b/'capsule.h').open('a') as f:
+ f.write(c_array('compiler_signature',(b/'compiler.sig').read_bytes())+c_array('compiler_message',message))

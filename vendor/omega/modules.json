@@ -1,0 +1,581 @@
+{
+  "entry": "entry.omega",
+  "format": "omega-modules-1",
+  "inference_mode": "dynamic",
+  "linked_sha256": "14dd361a2c16913887cced5e1703be331a770bef9304393f7cdf6e9dad7cc22a",
+  "modules": {
+    "ciencia/core/exato.omega": {
+      "exports": [
+        "add",
+        "budget",
+        "check",
+        "copy",
+        "count",
+        "determinant",
+        "dot",
+        "eye",
+        "integer",
+        "mat",
+        "mul",
+        "nonnegative",
+        "num",
+        "orient",
+        "polynomial",
+        "positive",
+        "power",
+        "q",
+        "rem_int",
+        "result",
+        "rref",
+        "scale",
+        "solve",
+        "text_field",
+        "transpose",
+        "val",
+        "vector",
+        "zeros"
+      ],
+      "imports": {
+        "m": "std/math.omega",
+        "s": "std/string.omega"
+      },
+      "sha256": "7530869ab1ef7a2de655f77a5c690521f1b40464dc5ba4bf81680f480bf9348f"
+    },
+    "ciencia/core/intervalos.omega": {
+      "exports": [
+        "add",
+        "box",
+        "div",
+        "encloses",
+        "exp",
+        "intersect",
+        "log",
+        "midpoint",
+        "mul",
+        "point",
+        "scale",
+        "sqrt",
+        "square",
+        "sub"
+      ],
+      "imports": {
+        "m": "std/math.omega"
+      },
+      "sha256": "5d00913b7a3f5f2a08730b933bc70328cd624362113d65b520c050e28d2d4fac"
+    },
+    "entry.omega": {
+      "exports": [],
+      "imports": {
+        "e": "omega_core/egraph_saturation.omega"
+      },
+      "sha256": "110d286df74ff5df0647f0a6e391144a3db2dd05545b7e49f56aedfcbaa0a9bc"
+    },
+    "omega_core/algebra.omega": {
+      "exports": [
+        "apply",
+        "entropy",
+        "inverse",
+        "matrix_add",
+        "maxabs",
+        "norm2",
+        "poly_add",
+        "poly_const",
+        "poly_diff",
+        "poly_eval",
+        "poly_extend",
+        "poly_mul",
+        "poly_power",
+        "poly_read",
+        "poly_scale",
+        "poly_text",
+        "poly_var",
+        "probability",
+        "same",
+        "symmetric_positive"
+      ],
+      "imports": {
+        "iv": "ciencia/core/intervalos.omega",
+        "m": "std/math.omega",
+        "u": "ciencia/core/exato.omega"
+      },
+      "sha256": "999bd5a5b53154e8a38f74064fbdcc0ae1812c5cbdb7d6215d80918d3af50274"
+    },
+    "omega_core/egraph_saturation.omega": {
+      "exports": [
+        "execute"
+      ],
+      "imports": {
+        "a": "omega_core/algebra.omega",
+        "u": "ciencia/core/exato.omega"
+      },
+      "sha256": "12a36a2b17535cbc94289adf75f57e1ffb1ecf0d97767f14db174ca9e5a3a1c0"
+    },
+    "std/math.omega": {
+      "exports": [
+        "abs",
+        "ceil_q",
+        "cos_interval",
+        "exp_interval",
+        "floor_q",
+        "log_interval",
+        "max",
+        "min",
+        "pow_int",
+        "sin_interval",
+        "sqrt_interval",
+        "trig_interval"
+      ],
+      "imports": {},
+      "sha256": "2993e838b203fa9f0d2c74ab7b00c9f484a482cb716e1cf73a9b77ed0c831cac"
+    },
+    "std/string.omega": {
+      "exports": [
+        "as_list",
+        "as_number",
+        "as_object",
+        "as_string",
+        "canonical",
+        "ends_with",
+        "format_q",
+        "rational",
+        "replace",
+        "split",
+        "starts_with",
+        "trim"
+      ],
+      "imports": {},
+      "sha256": "4747803b2e53212005648d3a7552e6dfe82edc2e230cd96d0302e5e7a86045a7"
+    }
+  },
+  "order": [
+    "std/math.omega",
+    "std/string.omega",
+    "ciencia/core/exato.omega",
+    "ciencia/core/intervalos.omega",
+    "omega_core/algebra.omega",
+    "omega_core/egraph_saturation.omega",
+    "entry.omega"
+  ],
+  "origins": {
+    "om_mod_0_add": {
+      "function": "add",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_budget": {
+      "function": "budget",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_check": {
+      "function": "check",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_copy": {
+      "function": "copy",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_count": {
+      "function": "count",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_determinant": {
+      "function": "determinant",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_dot": {
+      "function": "dot",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_eye": {
+      "function": "eye",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_integer": {
+      "function": "integer",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_mat": {
+      "function": "mat",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_mul": {
+      "function": "mul",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_nonnegative": {
+      "function": "nonnegative",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_num": {
+      "function": "num",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_orient": {
+      "function": "orient",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_polynomial": {
+      "function": "polynomial",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_positive": {
+      "function": "positive",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_power": {
+      "function": "power",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_q": {
+      "function": "q",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_rem_int": {
+      "function": "rem_int",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_result": {
+      "function": "result",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_rref": {
+      "function": "rref",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_scale": {
+      "function": "scale",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_solve": {
+      "function": "solve",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_text_field": {
+      "function": "text_field",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_transpose": {
+      "function": "transpose",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_val": {
+      "function": "val",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_vector": {
+      "function": "vector",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_0_zeros": {
+      "function": "zeros",
+      "module": "ciencia/core/exato.omega"
+    },
+    "om_mod_1_add": {
+      "function": "add",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_box": {
+      "function": "box",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_div": {
+      "function": "div",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_encloses": {
+      "function": "encloses",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_exp": {
+      "function": "exp",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_intersect": {
+      "function": "intersect",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_log": {
+      "function": "log",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_midpoint": {
+      "function": "midpoint",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_mul": {
+      "function": "mul",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_point": {
+      "function": "point",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_scale": {
+      "function": "scale",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_sqrt": {
+      "function": "sqrt",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_square": {
+      "function": "square",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_1_sub": {
+      "function": "sub",
+      "module": "ciencia/core/intervalos.omega"
+    },
+    "om_mod_3_apply": {
+      "function": "apply",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_entropy": {
+      "function": "entropy",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_inverse": {
+      "function": "inverse",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_matrix_add": {
+      "function": "matrix_add",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_maxabs": {
+      "function": "maxabs",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_norm2": {
+      "function": "norm2",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_add": {
+      "function": "poly_add",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_clean": {
+      "function": "poly_clean",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_const": {
+      "function": "poly_const",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_diff": {
+      "function": "poly_diff",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_eval": {
+      "function": "poly_eval",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_extend": {
+      "function": "poly_extend",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_insert": {
+      "function": "poly_insert",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_mul": {
+      "function": "poly_mul",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_power": {
+      "function": "poly_power",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_read": {
+      "function": "poly_read",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_scale": {
+      "function": "poly_scale",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_text": {
+      "function": "poly_text",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_poly_var": {
+      "function": "poly_var",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_probability": {
+      "function": "probability",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_same": {
+      "function": "same",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_3_symmetric_positive": {
+      "function": "symmetric_positive",
+      "module": "omega_core/algebra.omega"
+    },
+    "om_mod_4_as_polynomial": {
+      "function": "as_polynomial",
+      "module": "omega_core/egraph_saturation.omega"
+    },
+    "om_mod_4_execute": {
+      "function": "execute",
+      "module": "omega_core/egraph_saturation.omega"
+    },
+    "om_mod_4_extracted": {
+      "function": "extracted",
+      "module": "omega_core/egraph_saturation.omega"
+    },
+    "om_mod_4_ingest": {
+      "function": "ingest",
+      "module": "omega_core/egraph_saturation.omega"
+    },
+    "om_mod_4_intern": {
+      "function": "intern",
+      "module": "omega_core/egraph_saturation.omega"
+    },
+    "om_mod_4_matching": {
+      "function": "matching",
+      "module": "omega_core/egraph_saturation.omega"
+    },
+    "om_mod_4_merge": {
+      "function": "merge",
+      "module": "omega_core/egraph_saturation.omega"
+    },
+    "om_mod_4_rebuild": {
+      "function": "rebuild",
+      "module": "omega_core/egraph_saturation.omega"
+    },
+    "om_mod_4_rewrite": {
+      "function": "rewrite",
+      "module": "omega_core/egraph_saturation.omega"
+    },
+    "om_mod_4_root": {
+      "function": "root",
+      "module": "omega_core/egraph_saturation.omega"
+    },
+    "om_mod_5_abs": {
+      "function": "abs",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_box": {
+      "function": "box",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_ceil_q": {
+      "function": "ceil_q",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_cos_interval": {
+      "function": "cos_interval",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_exp_interval": {
+      "function": "exp_interval",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_floor_q": {
+      "function": "floor_q",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_log_interval": {
+      "function": "log_interval",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_log_unit": {
+      "function": "log_unit",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_max": {
+      "function": "max",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_min": {
+      "function": "min",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_pow_int": {
+      "function": "pow_int",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_precision": {
+      "function": "precision",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_rounded": {
+      "function": "rounded",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_sin_interval": {
+      "function": "sin_interval",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_sqrt_interval": {
+      "function": "sqrt_interval",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_times": {
+      "function": "times",
+      "module": "std/math.omega"
+    },
+    "om_mod_5_trig_interval": {
+      "function": "trig_interval",
+      "module": "std/math.omega"
+    },
+    "om_mod_6_as_list": {
+      "function": "as_list",
+      "module": "std/string.omega"
+    },
+    "om_mod_6_as_number": {
+      "function": "as_number",
+      "module": "std/string.omega"
+    },
+    "om_mod_6_as_object": {
+      "function": "as_object",
+      "module": "std/string.omega"
+    },
+    "om_mod_6_as_string": {
+      "function": "as_string",
+      "module": "std/string.omega"
+    },
+    "om_mod_6_canonical": {
+      "function": "canonical",
+      "module": "std/string.omega"
+    },
+    "om_mod_6_ends_with": {
+      "function": "ends_with",
+      "module": "std/string.omega"
+    },
+    "om_mod_6_format_q": {
+      "function": "format_q",
+      "module": "std/string.omega"
+    },
+    "om_mod_6_rational": {
+      "function": "rational",
+      "module": "std/string.omega"
+    },
+    "om_mod_6_replace": {
+      "function": "replace",
+      "module": "std/string.omega"
+    },
+    "om_mod_6_split": {
+      "function": "split",
+      "module": "std/string.omega"
+    },
+    "om_mod_6_starts_with": {
+      "function": "starts_with",
+      "module": "std/string.omega"
+    },
+    "om_mod_6_trim": {
+      "function": "trim",
+      "module": "std/string.omega"
+    },
+    "principal": {
+      "function": "principal",
+      "module": "entry.omega"
+    }
+  },
+  "types": {
+    "format": "omega-native-dynamic-1",
+    "scope": "runtime tag checks; no static type proof"
+  }
+}

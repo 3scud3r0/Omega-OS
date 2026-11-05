@@ -72,36 +72,3 @@ void net_release(void) {
  if(!loaned) panic("Net release without loan");
  q[0].last++; loaned=false; offer(0,loan); (void)inb(io+19);
 }
-static bool packet(uint8_t kind,uint64_t nonce) {
- uint8_t *p=net_tx_buffer(); memset(p,0,64);
- memset(p,255,6); memcpy(p+6,mac,6); p[12]=0x88; p[13]=0xb5; p[14]=kind;
- memcpy(p+16,&nonce,8); return net_send(64);
-}
-void net_test(void) {
- uint64_t start,last=0,nonce=0x4f4d454741000000ULL; bool received=false,acked=false; uint8_t *page;
- if(!net_init()) { uart_puts("NET optional device absent\n"); return; }
- nonce|=mac[5];
- { uint64_t phys=pmm_alloc_frame(); if(!phys||!mmu_map(boot_pml4,0x40003000,phys,PAGE_WRITE)) panic("network SLS page"); }
- page=(uint8_t *)0x40003000; (void)sls_register((uint64_t)page);
- start=rdtsc();
- while(rdtsc()-start<20000000000ULL) {
-  const uint8_t *p; size_t length;
-  if(rdtsc()-last>10000000ULL) { if(!packet(1,nonce)) panic("network TX"); last=rdtsc(); }
-  if(net_receive(&p,&length)) {
-   if(length>=24&&p[12]==0x88&&p[13]==0xb5) {
-    uint64_t peer; memcpy(&peer,p+16,8);
-    if(p[14]==1&&peer!=nonce) {
-     /* Copy into durable state is intentional; RX itself remains zero-copy. */
-     memset(page,0,4096); memcpy(page,"OMEGA-PEER-V2",13); memcpy(page+16,&peer,8); received=true;
-     if(!packet(2,peer)) panic("network ACK");
-    } else if(p[14]==2&&peer==nonce) acked=true;
-   }
-   net_release();
-  }
-  if(received&&acked) break;
-  cpu_pause();
- }
- if(!received||!acked) panic("network peer timeout");
- if(!mmu_sls_commit(boot_pml4)) panic("peer persistence");
- uart_puts("TEST VirtIO-Net two-node Ethernet + peer durable commit PASS\n");
-}

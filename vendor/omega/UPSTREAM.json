@@ -1,0 +1,24 @@
+{
+  "repository": "3scud3r0/Omega",
+  "commit": "47dd6a20f1699ac6e54ece82397ae64fa78493c4",
+  "sha256": {
+    "modules.json": "30844dbfa361125e5a3da4cefe991ff61e4c9fb7dc408cf78166dcd92729e67e",
+    "egraph_linked.omega": "14dd361a2c16913887cced5e1703be331a770bef9304393f7cdf6e9dad7cc22a",
+    "omega_synth_mcts/policy.py": "0dcec310df231dd4508a8748ef924d963f84262a5e6c1ca189caf2c4deace221",
+    "omega_synth_mcts/search.py": "ff8ece602d5b14f4613ce8ad32cfb6bd7681ba90f871c4500a618bae6fbe7ce2",
+    "omega_selfhost/compiler.omega": "78218b5eabc440fc870bd3d1bcc19d1173eb2c6b0f00176ded8fb64bf7d89f2a",
+    "omega_selfhost/bootstrap.py": "89c5b26afc40d1c50dd64378b200c1cedcd2006dd9905d543a4c1f08f98221a7",
+    "omega_core/egraph_saturation.omega": "12a36a2b17535cbc94289adf75f57e1ffb1ecf0d97767f14db174ca9e5a3a1c0",
+    "omega_core/algebra.omega": "999bd5a5b53154e8a38f74064fbdcc0ae1812c5cbdb7d6215d80918d3af50274",
+    "std/string.omega": "4747803b2e53212005648d3a7552e6dfe82edc2e230cd96d0302e5e7a86045a7",
+    "std/math.omega": "2993e838b203fa9f0d2c74ab7b00c9f484a482cb716e1cf73a9b77ed0c831cac",
+    "ciencia/core/exato.omega": "7530869ab1ef7a2de655f77a5c690521f1b40464dc5ba4bf81680f480bf9348f",
+    "ciencia/core/intervalos.omega": "5d00913b7a3f5f2a08730b933bc70328cd624362113d65b520c050e28d2d4fac",
+    "entry.omega": "110d286df74ff5df0647f0a6e391144a3db2dd05545b7e49f56aedfcbaa0a9bc"
+  },
+  "derived_files": [
+    "entry.omega",
+    "egraph_linked.omega",
+    "modules.json"
+  ]
+}

@@ -19,6 +19,12 @@ void _start(void) {
     if(call(4,64)) (void)call(3,1);
    }
   }
+  { const char source[]="tensor result = (7+5)*2; mostrar result;";
+   volatile unsigned char *p=(volatile unsigned char *)0x80003000ULL;
+   u64 length=data[21];
+   if(!length){length=sizeof source;for(i=0;i<length;i++)p[i]=(unsigned char)source[i];}
+   if(call(9,length)) (void)call(3,1);
+  }
   for(i=0;i<256;i++) while(call(1,i)!=0) { __asm__ volatile("pause"); }
   for(;;) { data[1]++; __asm__ volatile("pause"); }
  }

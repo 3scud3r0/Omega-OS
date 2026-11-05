@@ -1,0 +1,338 @@
+modulo science_exact;
+importar "../../std/string.omega" como s;
+importar "../../std/math.omega" como m;
+exportar rem_int, val, q, num, count, vector, mat, check, positive, nonnegative, integer, power, copy, zeros, eye, dot, add, scale, transpose, mul, rref, solve, determinant, polynomial, orient, result, budget, text_field;
+funcao check(v)  {
+  se(qbits(v)>8192)  {
+    fail("Scientific rational bit budget exceeded");
+  }
+  retornar v;
+}
+funcao val(x)  {
+  se(!isnum(x)&&!isstr(x))  {
+    fail("Exact scalar required");
+  }
+  se(isstr(x)&&len(x)>640)  {
+    fail("Scalar text budget");
+  }
+  retornar check(s::rational(text(x)));
+}
+funcao q(r,k)  {
+  retornar val(r[k]);
+}
+funcao num(r,k,fallback)  {
+  se(has(r,k))  {
+    retornar q(r,k);
+  }
+  retornar fallback;
+}
+funcao integer(x,lo,hi)  {
+  se(!isnum(x)||qden(x)!=1||x<lo||x>hi)  {
+    fail("Integer outside scientific domain/budget");
+  }
+  retornar x;
+}
+funcao count(r,k,lo,hi)  {
+  retornar integer(q(r,k),lo,hi);
+}
+funcao positive(x)  {
+  se(x<=0)  {
+    fail("Strictly positive quantity required");
+  }
+  retornar x;
+}
+funcao nonnegative(x)  {
+  se(x<0)  {
+    fail("Nonnegative quantity required");
+  }
+  retornar x;
+}
+funcao budget(n,limit)  {
+  retornar integer(n,0,limit);
+}
+funcao vector(raw)  {
+  se(!islist(raw)||len(raw)>1024)  {
+    fail("Vector budget/shape");
+  }
+  var a=[];
+  var i=0;
+  enquanto(i<len(raw))  {
+    push(a,val(raw[i]));
+    i=i+1;
+  }
+  retornar a;
+}
+funcao mat(raw)  {
+  se(!islist(raw)||len(raw)<1||len(raw)>32||!islist(raw[0])||len(raw[0])<1||len(raw[0])>33)  {
+    fail("Matrix shape/budget");
+  }
+  var a=[];
+  var i=0;
+  enquanto(i<len(raw))  {
+    var row=vector(raw[i]);
+    se(len(row)!=len(raw[0]))  {
+      fail("Ragged matrix");
+    }
+    push(a,row);
+    i=i+1;
+  }
+  retornar a;
+}
+funcao copy(a)  {
+  var out=[];
+  var i=0;
+  enquanto(i<len(a))  {
+    push(out,slice(a[i],0,len(a[i])));
+    i=i+1;
+  }
+  retornar out;
+}
+funcao zeros(n)  {
+  integer(n,0,1024);
+  var a=[];
+  var i=0;
+  enquanto(i<n)  {
+    push(a,0);
+    i=i+1;
+  }
+  retornar a;
+}
+funcao eye(n)  {
+  integer(n,1,32);
+  var a=[];
+  var i=0;
+  enquanto(i<n)  {
+    var row=zeros(n);
+    put(row,i,1);
+    push(a,row);
+    i=i+1;
+  }
+  retornar a;
+}
+funcao power(x,n)  {
+  integer(n,-128,128);
+  se(n<0)  {
+    se(x==0)  {
+      fail("Negative power of zero");
+    }
+    retornar 1/power(x,-n);
+  }
+  var y=1;
+  enquanto(n>0)  {
+    se(n%2==1)  {
+      y=check(y*x);
+    }
+    n=qfloor(n/2);
+    se(n>0)  {
+      x=check(x*x);
+    }
+  }
+  retornar y;
+}
+funcao dot(a,b)  {
+  se(len(a)!=len(b))  {
+    fail("Dot shape");
+  }
+  var v=0;
+  var i=0;
+  enquanto(i<len(a))  {
+    v=check(v+a[i]*b[i]);
+    i=i+1;
+  }
+  retornar v;
+}
+funcao add(a,b)  {
+  se(len(a)!=len(b))  {
+    fail("Vector sum shape");
+  }
+  var out=[];
+  var i=0;
+  enquanto(i<len(a))  {
+    push(out,check(a[i]+b[i]));
+    i=i+1;
+  }
+  retornar out;
+}
+funcao scale(a,x)  {
+  var out=[];
+  var i=0;
+  enquanto(i<len(a))  {
+    push(out,check(a[i]*x));
+    i=i+1;
+  }
+  retornar out;
+}
+funcao transpose(a)  {
+  var out=[];
+  var j=0;
+  enquanto(j<len(a[0]))  {
+    var row=[];
+    var i=0;
+    enquanto(i<len(a))  {
+      push(row,a[i][j]);
+      i=i+1;
+    }
+    push(out,row);
+    j=j+1;
+  }
+  retornar out;
+}
+funcao mul(a,b)  {
+  se(len(a[0])!=len(b))  {
+    fail("Matrix product shape");
+  }
+  var bt=transpose(b);
+  var out=[];
+  var i=0;
+  enquanto(i<len(a))  {
+    var row=[];
+    var j=0;
+    enquanto(j<len(bt))  {
+      push(row,dot(a[i],bt[j]));
+      j=j+1;
+    }
+    push(out,row);
+    i=i+1;
+  }
+  retornar out;
+}
+funcao rref(raw)  {
+  var a=copy(raw);
+  var row=0;
+  var col=0;
+  var pivots=[];
+  enquanto(row<len(a)&&col<len(a[0]))  {
+    var p=row;
+    enquanto(p<len(a)&&a[p][col]==0)  {
+      p=p+1;
+    }
+    se(p<len(a))  {
+      var t=a[row];
+      put(a,row,a[p]);
+      put(a,p,t);
+      var d=a[row][col];
+      var j=0;
+      enquanto(j<len(a[0]))  {
+        put(a[row],j,check(a[row][j]/d));
+        j=j+1;
+      }
+      var i=0;
+      enquanto(i<len(a))  {
+        se(i!=row)  {
+          var f=a[i][col];
+          j=0;
+          enquanto(j<len(a[0]))  {
+            put(a[i],j,check(a[i][j]-f*a[row][j]));
+            j=j+1;
+          }
+        }
+        i=i+1;
+      }
+      push(pivots,col);
+      row=row+1;
+    }
+    col=col+1;
+  }
+  var out=obj();
+  put(out,"matrix",a);
+  put(out,"pivots",pivots);
+  put(out,"rank",row);
+  retornar out;
+}
+funcao solve(a,b)  {
+  var n=len(a);
+  se(n!=len(a[0])||len(b)!=n)  {
+    fail("Square solve shape");
+  }
+  var augmented=copy(a);
+  var i=0;
+  enquanto(i<n)  {
+    push(augmented[i],b[i]);
+    i=i+1;
+  }
+  var reduced=rref(augmented);
+  se(reduced["rank"]!=n)  {
+    fail("Singular linear system");
+  }
+  var x=[];
+  i=0;
+  enquanto(i<n)  {
+    se(reduced["pivots"][i]!=i)  {
+      fail("Inconsistent linear system");
+    }
+    push(x,reduced["matrix"][i][n]);
+    i=i+1;
+  }
+  retornar x;
+}
+funcao determinant(raw)  {
+  var a=copy(raw);
+  var n=len(a);
+  se(n!=len(a[0]))  {
+    fail("Square determinant shape");
+  }
+  var previous=1;
+  var sign=1;
+  var k=0;
+  enquanto(k<n-1)  {
+    var p=k;
+    enquanto(p<n&&a[p][k]==0)  {
+      p=p+1;
+    }
+    se(p==n)  {
+      retornar 0;
+    }
+    se(p!=k)  {
+      var row=a[p];
+      put(a,p,a[k]);
+      put(a,k,row);
+      sign=-sign;
+    }
+    var pivot=a[k][k];
+    var i=k+1;
+    enquanto(i<n)  {
+      var j=k+1;
+      enquanto(j<n)  {
+        put(a[i],j,check((pivot*a[i][j]-a[i][k]*a[k][j])/previous));
+        j=j+1;
+      }
+      put(a[i],k,0);
+      i=i+1;
+    }
+    previous=pivot;
+    k=k+1;
+  }
+  retornar sign*a[n-1][n-1];
+}
+funcao polynomial(coeffs,x)  {
+  var y=0;
+  var i=len(coeffs);
+  enquanto(i>0)  {
+    i=i-1;
+    y=check(y*x+coeffs[i]);
+  }
+  retornar y;
+}
+funcao orient(a,b,c)  {
+  retornar (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+}
+funcao result(kind,value)  {
+  var r=obj();
+  put(r,"model",kind);
+  put(r,"value",value);
+  put(r,"formal_admission",0);
+  retornar r;
+}
+funcao text_field(r,k,limit)  {
+  var v=s::as_string(r[k]);
+  se(len(v)>limit)  {
+    fail("Scientific text budget");
+  }
+  retornar v;
+}
+funcao rem_int(a,n)  {
+  se(qden(a)!=1||qden(n)!=1||n<=0)  {
+    fail("Integer remainder domain");
+  }
+  retornar a-n*qfloor(a/n);
+}

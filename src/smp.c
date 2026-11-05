@@ -2,7 +2,7 @@
 #include "mmu.h"
 #include "idt.h"
 #include "uart.h"
-static uint8_t ap_stack[16384] ALIGN_4K __attribute__((used));
+uint8_t ap_stack[16384] ALIGN_4K __attribute__((used,externally_visible));
 static volatile uint32_t *lapic;
 static uint32_t ap_id;
 static uint32_t online ALIGN_64,done ALIGN_64;

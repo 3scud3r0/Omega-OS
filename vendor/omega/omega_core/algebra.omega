@@ -1,0 +1,195 @@
+modulo engine_algebra;
+importar "../ciencia/core/exato.omega" como u;
+importar "../ciencia/core/intervalos.omega" como iv;
+importar "../std/math.omega" como m;
+exportar same, matrix_add, apply, inverse, norm2, maxabs, symmetric_positive, probability, entropy, poly_read, poly_const, poly_var, poly_add, poly_scale, poly_mul, poly_diff, poly_eval, poly_extend, poly_power, poly_text;
+
+# Shared exact algebra. Sparse polynomials are lists [coefficient, exponent-vector].
+# Every public data boundary checks dimensions; intermediate arithmetic is bounded.
+funcao same(a,b) {
+  se(len(a)!=len(b)) { retornar 0; }
+  var i=0;
+  enquanto(i<len(a)) { se(a[i]!=b[i]) { retornar 0; } i=i+1; }
+  retornar 1;
+}
+funcao matrix_add(a,b) {
+  se(len(a)!=len(b)||len(a[0])!=len(b[0])) { fail("Matrix sum shape"); }
+  var c=[]; var i=0;
+  enquanto(i<len(a)) { push(c,u::add(a[i],b[i])); i=i+1; }
+  retornar c;
+}
+funcao apply(a,x) {
+  var y=[]; var i=0;
+  enquanto(i<len(a)) { push(y,u::dot(a[i],x)); i=i+1; }
+  retornar y;
+}
+funcao inverse(a) {
+  se(len(a)!=len(a[0])) { fail("Square inverse required"); }
+  var columns=[]; var i=0;
+  enquanto(i<len(a)) {
+    var e=u::zeros(len(a)); put(e,i,1); push(columns,u::solve(a,e)); i=i+1;
+  }
+  retornar u::transpose(columns);
+}
+funcao norm2(a) { retornar u::dot(a,a); }
+funcao maxabs(a) {
+  var v=0; var i=0;
+  enquanto(i<len(a)) { v=m::max(v,m::abs(a[i])); i=i+1; }
+  retornar v;
+}
+funcao symmetric_positive(a) {
+  var n=len(a);
+  se(n<1||n>16||len(a[0])!=n) { fail("SPD matrix dimension 1..16"); }
+  var i=0;
+  enquanto(i<n) {
+    var principal=[]; var j=0;
+    enquanto(j<n) {
+      se(a[i][j]!=a[j][i]) { fail("Symmetric matrix required"); }
+      se(j<=i) { push(principal,slice(a[j],0,i+1)); }
+      j=j+1;
+    }
+    se(u::determinant(principal)<=0) { fail("Positive-definite matrix required"); }
+    i=i+1;
+  }
+  retornar 1;
+}
+funcao probability(raw) {
+  var p=u::vector(raw);
+  se(len(p)<1||len(p)>256) { fail("Probability vector size"); }
+  var total=0; var i=0;
+  enquanto(i<len(p)) { u::nonnegative(p[i]); total=total+p[i]; i=i+1; }
+  se(total!=1) { fail("Probability mass must sum exactly to one"); }
+  retornar p;
+}
+funcao entropy(p,bits) {
+  var h=[0,0]; var i=0;
+  enquanto(i<len(p)) {
+    se(p[i]>0) { h=iv::add(h,iv::scale(m::log_interval(p[i],bits),-p[i])); }
+    i=i+1;
+  }
+  retornar h;
+}
+funcao poly_insert(p,c,e) {
+  u::check(c);
+  se(c==0) { retornar p; }
+  var i=0;
+  enquanto(i<len(p)) {
+    se(same(p[i][1],e)) { put(p[i],0,u::check(p[i][0]+c)); retornar p; }
+    i=i+1;
+  }
+  se(len(p)>=512) { fail("Sparse polynomial term budget"); }
+  push(p,[c,slice(e,0,len(e))]); retornar p;
+}
+funcao poly_clean(p) {
+  var out=[]; var i=0;
+  enquanto(i<len(p)) { se(p[i][0]!=0) { push(out,p[i]); } i=i+1; }
+  # Stable lexicographic exponent ordering, independent of insertion order.
+  i=1;
+  enquanto(i<len(out)) {
+    var j=i;
+    enquanto(j>0) {
+      var k=0;
+      enquanto(k<len(out[j][1])&&out[j][1][k]==out[j-1][1][k]) { k=k+1; }
+      se(k==len(out[j][1])||out[j][1][k]>=out[j-1][1][k]) { j=0; }
+      senao { var t=out[j]; put(out,j,out[j-1]); put(out,j-1,t); j=j-1; }
+    }
+    i=i+1;
+  }
+  retornar out;
+}
+funcao poly_read(raw,n) {
+  u::integer(n,1,16);
+  se(!islist(raw)||len(raw)>256) { fail("Sparse polynomial input budget"); }
+  var p=[]; var i=0;
+  enquanto(i<len(raw)) {
+    se(!islist(raw[i])||len(raw[i])!=2) { fail("Polynomial term [coefficient, exponents]"); }
+    var e=u::vector(raw[i][1]);
+    se(len(e)!=n) { fail("Polynomial exponent dimension"); }
+    var degree=0; var j=0;
+    enquanto(j<n) { u::integer(e[j],0,12); degree=degree+e[j]; j=j+1; }
+    se(degree>12) { fail("Polynomial total degree budget"); }
+    poly_insert(p,u::val(raw[i][0]),e); i=i+1;
+  }
+  retornar poly_clean(p);
+}
+funcao poly_const(c,n) {
+  se(c==0) { retornar []; }
+  retornar [[u::check(c),u::zeros(n)]];
+}
+funcao poly_var(i,n) {
+  u::integer(i,0,n-1); var e=u::zeros(n); put(e,i,1); retornar [[1,e]];
+}
+funcao poly_add(a,b) {
+  var c=[]; var i=0;
+  enquanto(i<len(a)) { poly_insert(c,a[i][0],a[i][1]); i=i+1; }
+  i=0;
+  enquanto(i<len(b)) { poly_insert(c,b[i][0],b[i][1]); i=i+1; }
+  retornar poly_clean(c);
+}
+funcao poly_scale(a,x) {
+  var c=[]; var i=0;
+  enquanto(i<len(a)) { poly_insert(c,u::check(a[i][0]*x),a[i][1]); i=i+1; }
+  retornar poly_clean(c);
+}
+funcao poly_mul(a,b) {
+  var c=[]; var i=0;
+  enquanto(i<len(a)) {
+    var j=0;
+    enquanto(j<len(b)) {
+      var e=u::add(a[i][1],b[j][1]); var k=0; var degree=0;
+      enquanto(k<len(e)) { degree=degree+e[k]; k=k+1; }
+      se(degree>24) { fail("Intermediate polynomial degree budget"); }
+      poly_insert(c,u::check(a[i][0]*b[j][0]),e); j=j+1;
+    }
+    i=i+1;
+  }
+  retornar poly_clean(c);
+}
+funcao poly_diff(p,i) {
+  var out=[]; var j=0;
+  enquanto(j<len(p)) {
+    var e=slice(p[j][1],0,len(p[j][1]));
+    se(i<0||i>=len(e)) { fail("Derivative variable outside polynomial"); }
+    se(e[i]>0) { var c=u::check(p[j][0]*e[i]); put(e,i,e[i]-1); poly_insert(out,c,e); }
+    j=j+1;
+  }
+  retornar poly_clean(out);
+}
+funcao poly_eval(p,x) {
+  var v=0; var i=0;
+  enquanto(i<len(p)) {
+    se(len(p[i][1])!=len(x)) { fail("Polynomial evaluation dimension"); }
+    var t=p[i][0]; var j=0;
+    enquanto(j<len(x)) { t=u::check(t*u::power(x[j],p[i][1][j])); j=j+1; }
+    v=u::check(v+t); i=i+1;
+  }
+  retornar v;
+}
+funcao poly_extend(p,n) {
+  var out=[]; var i=0;
+  enquanto(i<len(p)) {
+    var e=slice(p[i][1],0,len(p[i][1]));
+    se(len(e)>n) { fail("Cannot discard polynomial variables"); }
+    enquanto(len(e)<n) { push(e,0); }
+    push(out,[p[i][0],e]); i=i+1;
+  }
+  retornar out;
+}
+funcao poly_power(p,k,n) {
+  u::integer(k,0,12); var q=poly_const(1,n); var i=0;
+  enquanto(i<k) { q=poly_mul(q,p); i=i+1; }
+  retornar q;
+}
+funcao poly_text(p) {
+  var code="0"; var i=0;
+  enquanto(i<len(p)) {
+    var term="("+text(p[i][0])+")"; var j=0;
+    enquanto(j<len(p[i][1])) {
+      var k=0;
+      enquanto(k<p[i][1][j]) { term=term+"*x["+text(j)+"]"; k=k+1; }
+      j=j+1;
+    }
+    code=code+"+("+term+")"; i=i+1;
+  }
+  retornar code;
+}

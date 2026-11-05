@@ -1,0 +1,1 @@
+importar "omega_core/egraph_saturation.omega" como e; funcao principal(){var r=obj();put(r,"variables",1);put(r,"rounds",4);put(r,"max_nodes",64);put(r,"expression",["add",["var",0],["const",0]]);retornar e::execute(r);}
