@@ -2,28 +2,44 @@ CC = gcc
 OBJCOPY = objcopy
 QEMU = qemu-system-x86_64
 QEMU_IMG = qemu-img
-CFLAGS = -std=c99 -ffreestanding -O3 -flto -fno-stack-protector -fno-pie -no-pie -mno-red-zone -Wall -Wextra -Werror -pedantic -Iinclude
+DISK ?= disk.img
+CFLAGS = -std=c99 -ffreestanding -O3 -flto -fno-stack-protector -fno-pie -no-pie -mno-red-zone -Wall -Wextra -Werror -pedantic -Iinclude -Iinclude/crypto -Ibuild
 CFLAGS += -fno-builtin -fno-asynchronous-unwind-tables -fno-unwind-tables -mgeneral-regs-only -MMD -MP
-SOURCES = $(wildcard src/*.c)
+SOURCES = $(wildcard src/*.c) $(wildcard src/crypto/*.c)
 OBJECTS = $(SOURCES:src/%.c=build/%.o)
 .PHONY: all clean run test test-host bundle
-all: omega_os.elf disk.img
+all: omega_os.elf $(DISK)
 build:
 	mkdir -p $@
 build/%.o: src/%.c | build
+	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
+build/agent.o: user/agent.c | build
+	$(CC) -std=c99 -ffreestanding -fno-builtin -O2 -fno-stack-protector -fno-pie -mno-red-zone -mgeneral-regs-only -fno-asynchronous-unwind-tables -Wall -Wextra -Werror -pedantic -c $< -o $@
+build/agent.bin: build/agent.o
+	$(LD) -Ttext=0x80000000 --oformat=binary -e _start $< -o $@
+ifneq ($(AUTHORITY_BUNDLE),)
+build/capsule.h: $(AUTHORITY_BUNDLE) | build
+	cp $< $@
+else
+build/capsule.h: build/agent.bin tests/make_capsule.py
+	python3 tests/make_capsule.py
+endif
+build/admission.o: build/capsule.h
 build/omega64.elf: $(OBJECTS) link.ld
 	$(CC) $(CFLAGS) -nostdlib -Wl,-T,link.ld -Wl,--build-id=none -Wl,-z,max-page-size=0x1000 $(OBJECTS) -o $@
 # QEMU's Multiboot loader requires an ELF32 container; code switches to long mode.
 omega_os.elf: build/omega64.elf
 	$(OBJCOPY) -O elf32-i386 $< $@
-disk.img:
+$(DISK):
 	@if command -v $(QEMU_IMG) >/dev/null 2>&1; then $(QEMU_IMG) create -f raw $@ 32M; else python3 -c "with open('$@', 'xb') as f: f.truncate(32*1024*1024)"; fi
-run: omega_os.elf disk.img
-	$(QEMU) -kernel omega_os.elf -drive file=disk.img,if=virtio,format=raw -smp 2 -m 128M -serial stdio -display none
+run: omega_os.elf $(DISK)
+	$(QEMU) -kernel omega_os.elf -drive file=$(DISK),if=virtio,format=raw -smp 2 -m 128M -serial stdio -display none
 test: omega_os.elf
-	python3 tests/v1_validation.py "$(QEMU)"
-test-host: | build
+	python3 tests/v2_validation.py "$(QEMU)"
+	python3 tests/format_test.py "$(QEMU)"
+test-host: build/capsule.h | build
+	python3 tests/admission_test.py
 	python3 tests/rational_test.py
 	$(CC) -std=c99 -O3 -Wall -Wextra -Werror -pedantic -Iinclude -pthread tests/ipc_stress.c src/ipc.c -o build/ipc_stress
 	./build/ipc_stress

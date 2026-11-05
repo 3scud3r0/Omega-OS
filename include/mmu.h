@@ -7,6 +7,7 @@
 #define PAGE_USER 4ULL
 #define PAGE_PWT 8ULL
 #define PAGE_PCD 16ULL
+#define PAGE_NX (1ULL<<63)
 #define PAGE_DIRTY 64ULL
 #define PHYS_LIMIT (64ULL*1024*1024)
 extern uint64_t boot_pml4[512];
@@ -15,6 +16,8 @@ uint64_t pmm_alloc_frame(void);
 bool pmm_free_frame(uint64_t p);
 bool mmu_map(uint64_t *root,uint64_t va,uint64_t pa,uint64_t flags);
 bool mmu_map_device(uint64_t pa,uint64_t length);
+void sls_begin(void);
+bool sls_commit(void);
 void sls_test_crash_after(unsigned boundary);
 bool sls_register(uint64_t va);
 bool sls_contains(uint64_t va);

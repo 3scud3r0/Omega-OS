@@ -2,6 +2,7 @@
 #include "mmu.h"
 #include "proof_sched.h"
 #include "uart.h"
+#include "runtime.h"
 static idt_entry_t idt[256] ALIGN_4K __attribute__((section(".bss.idt")));
 typedef char gate_size[sizeof(idt_entry_t)==16?1:-1];
 typedef struct __attribute__((packed)) { uint16_t limit; uint64_t base; } table_ptr;
@@ -51,6 +52,7 @@ extern void isr29(void);
 extern void isr30(void);
 extern void isr31(void);
 extern void isr255(void);
+extern void isr48(void);
 __asm__(
 ".text\n"
 ".global exception_common\n"
@@ -76,6 +78,8 @@ __asm__(
 "andq $-16,%rsp\n"
 "call exception_dispatch\n"
 "movq %rbx,%rsp\n"
+"cmpq $2,%rax\n"
+"je runtime_return\n"
 "testq %rax,%rax\n"
 "jnz user_abort\n"
 "popq %r15\n"
@@ -245,6 +249,7 @@ __asm__(
 "pushq $0\n"
 "pushq $31\n"
 "jmp exception_common\n"
+".global isr48\nisr48: pushq $0\npushq $48\njmp exception_common\n"
 ".global isr255\n"
 "isr255:\n"
 "pushq $0\n"
@@ -300,7 +305,7 @@ void idt_init_cpu(unsigned cpu) {
 void idt_init(void) {
  unsigned i;
  for(i=0;i<256;i++) {
-  uint64_t addr=(uint64_t)(i<32?stubs[i]:isr255);
+  uint64_t addr=(uint64_t)(i<32?stubs[i]:(i==48?isr48:isr255));
   idt[i].offset_lo=(uint16_t)addr; idt[i].selector=8;
   idt[i].ist=(uint8_t)((i==8||i==2)?1:0); idt[i].attributes=0x8e;
   idt[i].offset_mid=(uint16_t)(addr>>16); idt[i].offset_hi=(uint32_t)(addr>>32); idt[i].reserved=0;
@@ -310,6 +315,7 @@ void idt_init(void) {
  uart_puts("IDT 256 gates / 32 exception stubs / TSS loaded\n");
 }
 uint64_t exception_dispatch(interrupt_frame_t *f) {
+ if(runtime_active()) return runtime_trap(f);
  uint64_t cr2; __asm__ volatile("movq %%cr2,%0":"=r"(cr2));
  if((f->cs&3)==3 && fault_task && (f->vector==13||f->vector==14)) {
   omega_task_t *task=(omega_task_t *)fault_task;

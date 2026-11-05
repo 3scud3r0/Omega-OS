@@ -13,4 +13,6 @@ bool virtio_blk_poll(bool *ok);
 bool virtio_blk_write_page(uint64_t sector,const void *page);
 bool virtio_blk_read_page(uint64_t sector,void *page);
 bool virtio_blk_flush(void);
+uint64_t virtio_blk_capacity(void);
+bool virtio_blk_sector(uint64_t sector,void *data,bool write);
 #endif
