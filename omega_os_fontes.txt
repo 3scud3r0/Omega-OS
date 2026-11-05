@@ -6660,7 +6660,6 @@ def epochs(pages): return tuple(struct.unpack_from('<Q',pages[i][1],80)[0] for i
 def sparse_copy(source,target):
     subprocess.run(['cp','--sparse=always',str(source),str(target)],check=True)
 
-
 ========================================================================
 ARQUIVO: tests/make_capsule.py
 ========================================================================

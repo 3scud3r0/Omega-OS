@@ -85,4 +85,3 @@ def boot(image,label,crash=0): return finish([launch(image,label,crash)])[0]
 def epochs(pages): return tuple(struct.unpack_from('<Q',pages[i][1],80)[0] for i in [0,1])
 def sparse_copy(source,target):
     subprocess.run(['cp','--sparse=always',str(source),str(target)],check=True)
-
