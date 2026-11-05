@@ -3,3 +3,6 @@ omega_os.elf
 disk.img
 
 *.img
+
+__pycache__/
+*.pyc

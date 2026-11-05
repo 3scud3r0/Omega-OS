@@ -7,6 +7,7 @@
 #include "smp.h"
 #include "runtime.h"
 #include "net.h"
+#include "udp.h"
 /* No external assembler: .code32 trampoline and .code64 C entry in this TU. */
 __asm__(
 ".section .multiboot,\"a\"\n.balign 4\n"
@@ -74,11 +75,11 @@ static void init_task(omega_task_t *t,uint64_t id) {
 }
 void kmain(uint32_t magic,uint32_t info) __attribute__((used,externally_visible));
 void kmain(uint32_t magic,uint32_t info) {
- uint64_t phys[3],available,start,cycles,dirty; unsigned i; bool crash_test=false;
+ uint64_t phys[3],available,start,cycles,dirty; unsigned i; bool crash_test=false,stress=false;
  omega_task_t *tasks[2]; uint8_t *probe=(uint8_t *)0x40002000;
- uart_init(); uart_puts("[OMEGA-OS V1] BOOT x86-64\n");
+ uart_init(); uart_puts("[OMEGA-OS V3] BOOT x86-64\n");
  idt_init();
- require(magic==0x2badb002&&info<PHYS_LIMIT-20,"Multiboot data");
+ require(magic==0x2badb002&&info<PHYS_LIMIT-32,"Multiboot data");
  { const uint32_t *mb=(const uint32_t *)(uint64_t)info;
   require((mb[0]&1)!=0,"Multiboot memory information"); available=0x100000ULL+(uint64_t)mb[2]*1024;
   if((mb[0]&4)&&mb[4]&&mb[4]<PHYS_LIMIT-32) {
@@ -86,12 +87,16 @@ void kmain(uint32_t magic,uint32_t info) {
    const char prefix[]="sls.crash="; unsigned pos;
    for(pos=0;pos<256&&cmd[pos];pos++) {
     unsigned j=0;
-    if((uint64_t)mb[4]+pos+11>=PHYS_LIMIT) break;
+    if((uint64_t)mb[4]+pos+16>=PHYS_LIMIT) break;
     while(j<10&&cmd[pos+j]==prefix[j]) j++;
-    if(j==10&&cmd[pos+j]>='1'&&cmd[pos+j]<='4') { sls_test_crash_after((unsigned)(cmd[pos+j]-'0')); crash_test=true; }
+    {const char key[]="sls.stress";unsigned k=0;while(k<10&&cmd[pos+k]==key[k])k++;if(k==10)stress=true;}
+    {const char key[]="omega.source=";unsigned k=0;while(k<13&&cmd[pos+k]==key[k])k++;
+     if(k==13){size_t n=0;while(n<511&&(uint64_t)mb[4]+pos+k+n<PHYS_LIMIT&&cmd[pos+k+n])n++;runtime_source(cmd+pos+k,n);break;}}
+    if(j==10&&cmd[pos+j]>='1'&&cmd[pos+j]<='8') { sls_test_crash_after((unsigned)(cmd[pos+j]-'0')); crash_test=true; }
    }
   }
  }
+ net_boot_config(info);
  pmm_init(available,(uint64_t)__kernel_end);
  uart_puts("PMM 64 MiB cap initialized\n");
  { uint64_t frame=pmm_alloc_frame();
@@ -149,9 +154,17 @@ void kmain(uint32_t magic,uint32_t info) {
  isolation_test((uint64_t)tasks[0]);
  require(sls_restore((uint64_t)tasks[0])&&omega_verify_contract(tasks[0]),"post-isolation restore");
  (void)net_init();
- runtime_run();
+ if(!runtime_run()){uart_puts("REJECTED V3: mutation quarantined; kernel context retained; HLT\n");for(;;)__asm__ volatile("cli; hlt");}
+ if(stress){
+  for(unsigned round=0;round<160;round++){
+   for(i=0;i<2;i++){tasks[i]->epoch++;tasks[i]->proof_hash=omega_contract_token(tasks[i]);}
+   require(mmu_sls_commit(boot_pml4)==2,"GC stress transaction");
+  }
+  for(i=0;i<2;i++)require(sls_restore((uint64_t)tasks[i])&&omega_verify_contract(tasks[i]),"GC stress restore");
+  uart_puts("TEST GC 160 durable multipage commits on bounded disk PASS\n");
+ }
  net_test();
  uart_puts("CPU TSC cycles: "); uart_put_dec(cycles);
- uart_puts("\nSTABLE V2: runtime/storage/admission complete; HLT\n");
+ uart_puts("\nSTABLE V3: compiler/cognition/GC/tunnel complete; HLT\n");
  for(;;) __asm__ volatile("cli; hlt");
 }

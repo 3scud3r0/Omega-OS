@@ -1,0 +1,511 @@
+# Omega 2 procedural language: the compiler is implemented in Omega itself.
+# No host-language parser/compiler API is callable from this program.
+funcao peek(p) { retornar p["tokens"][p["pos"]]; }
+funcao take(p) { var s = peek(p); put(p,"pos",p["pos"]+1); retornar s; }
+funcao accept(p,s) { se (peek(p)==s) { take(p); retornar 1; } retornar 0; }
+funcao need(p,s) { se (!accept(p,s)) { fail("Esperado " + s + ", encontrado " + peek(p)); } retornar 0; }
+funcao identifier(s) { retornar ident(s); }
+funcao name(p) { var s=take(p); se (!identifier(s)) { fail("Identificador esperado: "+s); } retornar s; }
+funcao lex(source) {
+  var tokens=[]; var i=0;
+  enquanto (i<len(source)) {
+    var c=source[i];
+    se (contains(" \t\r\n",c)) { i=i+1; }
+    senao {
+      se (c=="#" || (c=="/" && i+1<len(source) && source[i+1]=="/")) { enquanto (i<len(source) && source[i]!="\n") { i=i+1; } }
+      senao {
+        se (c=="\"") {
+          var start=i; i=i+1;
+          enquanto (i<len(source) && source[i]!="\"") {
+            se (source[i]=="\\") { i=i+1; }
+            i=i+1;
+          }
+          se (i>=len(source)) { fail("String sem fechamento"); }
+          i=i+1; push(tokens,slice(source,start,i));
+        }
+        senao {
+          se (decimal(source,i)>0) {
+            var start=i;
+            enquanto (i<len(source) && decimal(source,i)>0) { i=i+decimal(source,i); }
+            se (i<len(source) && source[i]==".") {
+              i=i+1;
+              enquanto (i<len(source) && decimal(source,i)>0) { i=i+decimal(source,i); }
+            }
+            push(tokens,slice(source,start,i));
+          }
+          senao {
+            se (identifier(c) || c>"~") {
+              var start=i; i=i+1;
+              enquanto (i<len(source) && (identifier(source[i]) || decimal(source,i)>0 || source[i]>"~")) { i=i+1; }
+              push(tokens,slice(source,start,i));
+            }
+            senao {
+              var two="";
+              se (i+1<len(source)) { two=slice(source,i,i+2); }
+              se (contains(["==","!=","<=",">=","&&","||"],two)) { push(tokens,two); i=i+2; }
+              senao {
+                se (!contains("{}();,[]+*/%<>=!-@^:.",c)) { fail("Caractere inesperado: "+c); }
+                push(tokens,c); i=i+1;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  push(tokens,"<fim>"); retornar tokens;
+}
+funcao parser(source) { var p=obj(); put(p,"tokens",lex(source)); put(p,"pos",0); retornar p; }
+funcao expr(p,level) {
+  var levels=[["||"],["&&"],["==","!="],["<","<=",">",">="],["+","-"],["*","/","%"]];
+  se (level<len(levels)) {
+    var a=expr(p,level+1);
+    enquanto (contains(levels[level],peek(p))) { var op=take(p); var b=expr(p,level+1); a=["bin",op,a,b]; }
+    retornar a;
+  }
+  se (contains(["!","-"],peek(p))) { var op=take(p); var a=expr(p,level); retornar ["un",op,a]; }
+  var s=take(p); var a=[];
+  se (s=="(") { a=expr(p,0); need(p,")"); }
+  senao {
+    se (s[0]=="\"") { a=["s",parsejson(s)]; }
+    senao {
+      se (decimal(s,0)>0) { a=["n",s]; }
+      senao {
+        se (s=="[") {
+          var items=[];
+          se (!accept(p,"]")) {
+            push(items,expr(p,0));
+            enquanto (accept(p,",")) { push(items,expr(p,0)); }
+            need(p,"]");
+          }
+          a=["list",items];
+        }
+        senao {
+          se (!identifier(s)) { fail("Expressao invalida: "+s); }
+          se (accept(p,"(")) {
+            var args=[];
+            se (!accept(p,")")) {
+              push(args,expr(p,0));
+              enquanto (accept(p,",")) { push(args,expr(p,0)); }
+              need(p,")");
+            }
+            a=["call",s,args];
+          } senao { a=["v",s]; }
+        }
+      }
+    }
+  }
+  enquanto (accept(p,"[")) { var b=expr(p,0); a=["index",a,b]; need(p,"]"); }
+  retornar a;
+}
+funcao block(p) {
+  need(p,"{"); var out=[];
+  enquanto (!accept(p,"}")) {
+    var word=peek(p);
+    se (accept(p,"var")) { var n=name(p); need(p,"="); var e=expr(p,0); push(out,["var",n,e]); need(p,";"); }
+    senao {
+      se (accept(p,"retornar")) { push(out,["return",expr(p,0)]); need(p,";"); }
+      senao {
+        se (accept(p,"parar")) { push(out,["break"]); need(p,";"); }
+        senao {
+          se (word=="se" || word=="enquanto") {
+            take(p); need(p,"("); var c=expr(p,0); need(p,")"); var body=block(p); var other=[];
+            se (word=="se" && accept(p,"senao")) { other=block(p); }
+            push(out,[word,c,body,other]);
+          }
+          senao {
+            se (p["tokens"][p["pos"]+1]=="=") {
+              var n=name(p); need(p,"="); var e=expr(p,0); push(out,["set",n,e]); need(p,";");
+            } senao { push(out,["expr",expr(p,0)]); need(p,";"); }
+          }
+        }
+      }
+    }
+  }
+  retornar out;
+}
+funcao parse(source) {
+  var p=parser(source); var functions=[];
+  enquanto (peek(p)!="<fim>") {
+    need(p,"funcao"); var n=name(p); need(p,"("); var args=[];
+    se (!accept(p,")")) { push(args,name(p)); enquanto (accept(p,",")) { push(args,name(p)); } need(p,")"); }
+    var body=block(p); push(functions,[n,args,body]);
+  }
+  retornar functions;
+}
+funcao builtin(n) {
+  retornar contains(["list","obj","len","get","put","push","has","keys","text","number","ident","decimal","isnum","isstr","islist","slice","join","contains","arg","argc","read","write","print","fail","json","parsejson","qnum","qden","qfloor","qbits","monotonic_ns","readline","flush","root_read","root_write","root_exists","sha256","file_sha256","append_cas","ed25519_verify","ed25519_sign","unix_time"],n);
+}
+funcao apply_c(n,args) {
+  var out=["({"]; var names=[]; var i=0;
+  enquanto (i<len(args)) {
+    var a="a"+text(i); push(names,a); push(out,"V "+a+"="+cexpr(args[i])+";"); i=i+1;
+  }
+  push(out,n+"("+join(names,",")+");})"); retornar join(out,"");
+}
+funcao chex(c) {
+  var digits="0123456789abcdef";var i=0;
+  enquanto(i<16){se(digits[i]==c){retornar i;}i=i+1;}
+  fail("Hexadecimal invalido");retornar 0;
+}
+funcao cstring(s) {
+  var parts=["\""];var i=0;
+  enquanto(i<len(s)){
+    var c=s[i];var quoted=json(c);var escaped=slice(quoted,1,len(quoted)-1);
+    se(c=="\u007f"){escaped="\\177";}
+    senao{
+      se(len(escaped)==6 && slice(escaped,0,2)=="\\u"){
+        var n=16*chex(escaped[4])+chex(escaped[5]);
+        escaped="\\0"+text((n-n%8)/8)+text(n%8);
+      }
+    }
+    push(parts,escaped);i=i+1;
+  }
+  push(parts,"\"");retornar join(parts,"");
+}
+funcao cexpr(e) {
+  var kind=e[0];
+  se (kind=="s") { retornar "o_str("+cstring(e[1])+")"; }
+  se (kind=="n") { retornar "o_num("+cstring(e[1])+")"; }
+  se (kind=="v") { retornar "v_"+e[1]; }
+  se (kind=="index") { retornar apply_c("o_get",[e[1],e[2]]); }
+  se (kind=="call") { var n="fn_"+e[1]; se (builtin(e[1])) { n="o_"+e[1]; } retornar apply_c(n,e[2]); }
+  se (kind=="list") {
+    var out=["({V r=o_list();"]; var i=0;
+    enquanto (i<len(e[1])) { push(out,"o_push(r,"+cexpr(e[1][i])+");"); i=i+1; }
+    push(out,"r;})"); retornar join(out,"");
+  }
+  se (kind=="un") { var n="o_neg"; se (e[1]=="!") { n="o_not"; } retornar n+"("+cexpr(e[2])+")"; }
+  se (e[1]=="&&" || e[1]=="||") { retornar "o_bool(o_truth("+cexpr(e[2])+")"+e[1]+"o_truth("+cexpr(e[3])+"))"; }
+  var ops=obj();
+  put(ops,"+","add");put(ops,"-","sub");put(ops,"*","mul");put(ops,"/","div");put(ops,"%","mod");
+  put(ops,"==","eq");put(ops,"!=","ne");put(ops,"<","lt");put(ops,"<=","le");put(ops,">","gt");put(ops,">=","ge");
+  retornar apply_c("o_"+ops[e[1]],[e[2],e[3]]);
+}
+funcao cblock(statements) {
+  var out=[]; var i=0;
+  enquanto (i<len(statements)) {
+    var s=statements[i]; var op=s[0];
+    se (op=="var" || op=="set") { var prefix=""; se (op=="var") { prefix="V "; } push(out,prefix+"v_"+s[1]+"="+cexpr(s[2])+";"); }
+    senao {
+      se (op=="expr") { push(out,cexpr(s[1])+";"); }
+      senao {
+        se (op=="return") { push(out,"return o_ret("+cexpr(s[1])+");"); }
+        senao {
+          se (op=="break") { push(out,"break;"); }
+          senao {
+            var word="while"; se (op=="se") { word="if"; }
+            push(out,word+"(o_truth("+cexpr(s[1])+")){o_tick();\n"+cblock(s[2])+"}\n");
+            se (len(s[3])>0) { push(out,"else{\n"+cblock(s[3])+"}\n"); }
+          }
+        }
+      }
+    }
+    i=i+1;
+  }
+  retornar join(out,"\n")+"\n";
+}
+funcao compile_procedural(source) {
+  var functions=parse(source); var lines=["#include \"runtime.h\""]; var i=0;
+  enquanto (i<len(functions)) {
+    var f=functions[i]; var args=[]; var j=0;
+    enquanto (j<len(f[1])) { push(args,"V v_"+f[1][j]); j=j+1; }
+    push(lines,"static V fn_"+f[0]+"("+join(args,",")+");"); i=i+1;
+  }
+  i=0;
+  enquanto (i<len(functions)) {
+    var f=functions[i]; var args=[]; var j=0;
+    enquanto (j<len(f[1])) { push(args,"V v_"+f[1][j]); j=j+1; }
+    push(lines,"static V fn_"+f[0]+"("+join(args,",")+"){o_enter();\n"+cblock(f[2])+"return o_ret(o_int(0));}\n"); i=i+1;
+  }
+  push(lines,"int main(int argc,char **argv){o_init(argc,argv);return (int)o_long(fn_principal());}\n");
+  retornar join(lines,"\n");
+}
+funcao alias(s) {
+  var pairs=[["param","parametro"],["loss","perda"],["grad","gradiente"],["step","passo"],["prove","provar"],["rewrite","reescrever"],["show","mostrar"],["theorem","teorema"],["verify","verificar"],["vector","vetor"],["matrix","matriz"],["grads","gradientes"],["wrt","em"],["rate","taxa"]];
+  var i=0; enquanto (i<len(pairs)) { se (pairs[i][0]==s) { retornar pairs[i][1]; } i=i+1; } retornar s;
+}
+funcao reserved(s) { retornar contains(["parametro","perda","gradiente","passo","provar","reescrever","mostrar","teorema","verificar","vetor","matriz","tensor","gradientes","em","taxa","passo_livre","passo_ruidoso","semente"],alias(s)); }
+funcao internal_name(n) { retornar len(n)>=14 && slice(n,0,14)=="__omega_coord_"; }
+funcao tname(p) { var n=name(p); se (reserved(n) || internal_name(n)) { fail("Nome reservado: "+n); } retornar n; }
+funcao keyword(p,s) { se (alias(take(p))!=s) { fail("Esperado palavra-chave: "+s); } retornar 0; }
+funcao texpr(p,level) {
+  se (level<2) {
+    var ops=["+","-"]; se (level==1) { ops=["*","/","@"]; }
+    var a=texpr(p,level+1);
+    enquanto (contains(ops,peek(p))) { var op=take(p); var b=texpr(p,level+1); a=["bin",op,a,b]; }
+    retornar a;
+  }
+  se (accept(p,"-")) { retornar ["un","-",texpr(p,2)]; }
+  se (accept(p,"+")) { retornar texpr(p,2); }
+  var s=take(p); var a=[];
+  se (s=="(") { a=texpr(p,0); need(p,")"); }
+  senao {
+    se (decimal(s,0)>0) { a=["n",text(number(s))]; }
+    senao {
+      se (s=="[") {
+        var items=[];
+        se (!accept(p,"]")) { push(items,texpr(p,0)); enquanto (accept(p,",")) { push(items,texpr(p,0)); } need(p,"]"); }
+        a=["list",items];
+      }
+      senao {
+        se (!identifier(s) || reserved(s) || internal_name(s)) { fail("Expressao tensorial invalida: "+s); }
+        se (accept(p,"(")) {
+          var args=[];
+          se (!accept(p,")")) { push(args,texpr(p,0)); enquanto (accept(p,",")) { push(args,texpr(p,0)); } need(p,")"); }
+          a=["call",s,args];
+        } senao { a=["v",s]; }
+      }
+    }
+  }
+  se (accept(p,"^")) { a=["bin","^",a,texpr(p,2)]; } retornar a;
+}
+funcao node(ir,op,args,shape) {
+  se (len(ir["nos"])>=12000 || len(shape)>2) { fail("Limite da IR excedido"); }
+  var size=1;var j=0;
+  enquanto (j<len(shape)) { se (shape[j]<1 || shape[j]>2048 || shape[j]%1!=0) { fail("Dimensao invalida"); } size=size*shape[j];j=j+1; }
+  se (size>1000000) { fail("Tensor excede o limite"); }
+  var n=obj();put(n,"op",op);put(n,"args",args);put(n,"forma",shape);push(ir["nos"],n);retornar len(ir["nos"])-1;
+}
+funcao nshape(ir,i) { retornar ir["nos"][i]["forma"]; }
+funcao shape_op(op,a,b) {
+  se (op=="neg" || op=="relu") { retornar a; }
+  se (op=="+" || op=="-") { se (a!=b) { fail("Soma com formas diferentes"); } retornar a; }
+  se (op=="*") { se (len(a)>0 && len(b)>0) { fail("Multiplicacao de dois tensores"); } se (len(a)>0) { retornar a; } retornar b; }
+  se (op=="/") { se (len(b)>0) { fail("Denominador tensorial"); } retornar a; }
+  se (op=="^") { se (len(a)>0 || len(b)>0) { fail("Potencia exige escalares"); } retornar []; }
+  se (op=="@") {
+    se (len(a)!=2 || len(b)<1 || len(b)>2 || a[1]!=b[0]) { fail("Produto matricial incompativel"); }
+    se (len(b)==1) { retornar [a[0]]; } retornar [a[0],b[1]];
+  }
+  se (op=="dot") { se (len(a)!=1 || a!=b) { fail("dot exige vetores iguais"); } retornar []; }
+  se (op=="transposta") { se (len(a)!=2) { fail("Transposta exige matriz"); } retornar [a[1],a[0]]; }
+  se (op=="soma") { retornar []; }
+  fail("Operacao desconhecida: "+op);retornar [];
+}
+funcao lower(ir,e) {
+  var kind=e[0];
+  se (kind=="n") { var i=node(ir,"num",[],[]);put(ir["nos"][i],"v",e[1]);retornar i; }
+  se (kind=="v") { se (!has(ir["simbolos"],e[1])) { fail("Identificador nao declarado: "+e[1]); } retornar ir["simbolos"][e[1]]; }
+  se (kind=="un") { var i=lower(ir,e[2]);retornar node(ir,"neg",[i],nshape(ir,i)); }
+  se (kind=="list") {
+    var args=[]; var shape=[];var j=0;
+    se (len(e[1])==0) { fail("Lista vazia"); }
+    enquanto (j<len(e[1])) { var i=lower(ir,e[1][j]);push(args,i);se (j==0) { shape=nshape(ir,i); } se (nshape(ir,i)!=shape || len(shape)>1) { fail("Lista nao retangular"); }j=j+1; }
+    var full=[len(args)];j=0;enquanto (j<len(shape)) { push(full,shape[j]);j=j+1; } retornar node(ir,"stack",args,full);
+  }
+  se (kind=="bin") {
+    var a=lower(ir,e[2]);var b=lower(ir,e[3]);var op=e[1];
+    se (op=="^") { var n=ir["nos"][b];se (n["op"]!="num") { fail("Expoente literal obrigatorio"); } var q=number(n["v"]);se (q%1!=0 || q<0 || q>20) { fail("Expoente fora de 0..20"); } }
+    retornar node(ir,op,[a,b],shape_op(op,nshape(ir,a),nshape(ir,b)));
+  }
+  se (kind=="call") {
+    var op=e[1];var args=[];var j=0;
+    enquanto (j<len(e[2])) { push(args,lower(ir,e[2][j]));j=j+1; }
+    se (op=="zeros" || op=="identidade") {
+      se (len(args)<1 || len(args)>2 || (op=="identidade" && len(args)!=1)) { fail("Construtor exige dimensoes"); }
+      var shape=[];j=0;
+      enquanto (j<len(args)) { var n=ir["nos"][args[j]];se (n["op"]!="num") { fail("Dimensao literal obrigatoria"); }push(shape,number(n["v"]));j=j+1; }
+      se (op=="identidade") { push(shape,shape[0]); } retornar node(ir,op,[],shape);
+    }
+    var count=1;se (op=="dot") { count=2; }
+    se (!contains(["relu","soma","transposta","dot"],op) || len(args)!=count) { fail("Funcao ou aridade invalida: "+op); }
+    var b=[];se (count==2) { b=nshape(ir,args[1]); }
+    retornar node(ir,op,args,shape_op(op,nshape(ir,args[0]),b));
+  }
+  fail("AST tensorial invalida");retornar 0;
+}
+funcao signature(ir,i) {
+  var n=ir["nos"][i];var op=n["op"];
+  se (op=="num") { retornar [op,text(number(n["v"]))]; }
+  se (op=="param") { retornar [op,n["nome"]]; }
+  se (op=="zeros" || op=="identidade") { retornar [op,n["forma"]]; }
+  var args=[];var j=0;enquanto (j<len(n["args"])) { push(args,signature(ir,n["args"][j]));j=j+1; }
+  se ((op=="+" || op=="*") && len(nshape(ir,n["args"][0]))==0 && len(nshape(ir,n["args"][1]))==0 && json(args[0])>json(args[1])) { args=[args[1],args[0]]; }
+  se (op=="transposta" && ir["nos"][n["args"][0]]["op"]=="transposta") { retornar signature(ir,ir["nos"][n["args"][0]]["args"][0]); }
+  se (op=="relu" && ir["nos"][n["args"][0]]["op"]=="relu") { retornar signature(ir,n["args"][0]); }
+  retornar [op,n["forma"],args];
+}
+funcao symbolic_node(ir,i) {
+  var n=ir["nos"][i];var op=n["op"];
+  se (op=="num") { retornar ["n",n["v"]]; }
+  se (op=="param") {
+    var shape=n["forma"];se (len(shape)==0) { retornar ["v",n["nome"]]; }
+    var rows=[];var j=0;
+    enquanto (j<shape[0]) {
+      se (len(shape)==1) { push(rows,["v","__omega_coord_"+text(len(n["nome"]))+"_"+n["nome"]+"_1_"+text(j)]); }
+      senao { var cols=[];var k=0;enquanto (k<shape[1]) { push(cols,["v","__omega_coord_"+text(len(n["nome"]))+"_"+n["nome"]+"_2_"+text(j)+"_"+text(k)]);k=k+1; }push(rows,["list",cols]); }
+      j=j+1;
+    }
+    retornar ["list",rows];
+  }
+  var args=[];var j=0;enquanto (j<len(n["args"])) { push(args,symbolic_node(ir,n["args"][j]));j=j+1; }
+  se (op=="stack") { retornar ["list",args]; }
+  se (op=="neg") { retornar ["un","-",args[0]]; }
+  se (contains(["+","-","*","/","^","@"],op)) { retornar ["bin",op,args[0],args[1]]; }
+  se (op=="zeros" || op=="identidade") {
+    var rows=[];var j=0;
+    enquanto (j<n["forma"][0]) {
+      se (len(n["forma"])==1) { push(rows,["n","0"]); }
+      senao { var cols=[];var k=0;enquanto (k<n["forma"][1]) { var value="0";se (op=="identidade" && j==k) { value="1"; }push(cols,["n",value]);k=k+1; }push(rows,["list",cols]); }
+      j=j+1;
+    }
+    retornar ["list",rows];
+  }
+  retornar ["call",op,args];
+}
+funcao expand_proof(ir,e) {
+  se (e[0]=="v" && has(ir["simbolos"],e[1])) { retornar symbolic_node(ir,ir["simbolos"][e[1]]); }
+  se (e[0]=="n" || e[0]=="v") { retornar e; }
+  se (e[0]=="bin") { retornar ["bin",e[1],expand_proof(ir,e[2]),expand_proof(ir,e[3])]; }
+  se (e[0]=="un") { retornar ["un",e[1],expand_proof(ir,e[2])]; }
+  var pos=1;se (e[0]=="call") { pos=2; }var args=[];var j=0;
+  enquanto (j<len(e[pos])) { push(args,expand_proof(ir,e[pos][j]));j=j+1; }
+  se (pos==2) { retornar ["call",e[1],args]; }retornar ["list",args];
+}
+funcao tensor_ir(source) {
+  var p=parser(source);var theorems=obj();var ir=obj();put(ir,"formato","omega-ir-2");put(ir,"versao","1.0.0");put(ir,"nos",[]);put(ir,"simbolos",obj());put(ir,"parametros",[]);put(ir,"perdas",obj());put(ir,"comandos",[]);
+  enquanto (peek(p)!="<fim>") {
+    var kind=alias(take(p));var cmd=obj();
+    se (contains(["parametro","perda","vetor","matriz","tensor"],kind)) {
+      var category="";
+      se (kind=="parametro" && contains(["vetor","matriz"],alias(peek(p)))) { category=alias(take(p));kind="parametro_tensor"; }
+      var n=tname(p);se (has(ir["simbolos"],n)) { fail("Redeclaracao: "+n); }need(p,"=");var i=lower(ir,texpr(p,0));need(p,";");var shape=nshape(ir,i);
+      se ((kind=="parametro" || kind=="perda") && len(shape)>0) { fail("Escalar esperado"); }
+      se ((kind=="vetor" || category=="vetor") && len(shape)!=1) { fail("Vetor esperado"); }
+      se ((kind=="matriz" || category=="matriz") && len(shape)!=2) { fail("Matriz esperada"); }
+      se (kind=="parametro" || kind=="parametro_tensor") {
+        var pid=node(ir,"param",[],shape);put(ir["nos"][pid],"nome",n);var info=obj();put(info,"nome",n);put(info,"id",pid);put(info,"inicial",i);push(ir["parametros"],info);put(ir["simbolos"],n,pid);
+      } senao { put(ir["simbolos"],n,i);se (kind=="perda") { put(ir["perdas"],n,i); } }
+      put(cmd,"tipo","declaracao");put(cmd,"nome",n);
+    }
+    senao {
+      se (contains(["gradiente","gradientes","passo","passo_livre","passo_ruidoso"],kind)) {
+        var n=tname(p);se (!has(ir["perdas"],n)) { fail("Perda inexistente"); }put(cmd,"tipo",kind);put(cmd,"nome",n);
+        se (kind!="gradientes") {
+          keyword(p,"em");var target=tname(p);var found=0;var j=0;
+          enquanto (j<len(ir["parametros"])) { se (ir["parametros"][j]["nome"]==target) { found=1; }j=j+1; }se (!found) { fail("Parametro inexistente"); }put(cmd,"parametro",target);
+        }
+        se (contains(["passo","passo_livre","passo_ruidoso"],kind)) {
+          keyword(p,"taxa");var rate=lower(ir,texpr(p,0));se (len(nshape(ir,rate))>0) { fail("Taxa nao escalar"); }put(cmd,"taxa",rate);
+          se (kind=="passo_ruidoso") { keyword(p,"semente");var seed=number(take(p));se (seed<0 || seed>=4294967296 || seed%1!=0) { fail("Semente invalida"); }put(cmd,"semente",seed); }
+        }
+        need(p,";");
+      }
+      senao {
+        se (kind=="mostrar") { var n=tname(p);need(p,";");se (!has(ir["simbolos"],n) && !has(theorems,n)) { fail("Simbolo inexistente"); }se (has(theorems,n)) { kind="mostrar_teorema"; }put(cmd,"tipo",kind);put(cmd,"nome",n); }
+        senao {
+          se (kind=="reescrever") {
+            var n=tname(p);se (!has(ir["perdas"],n)) { fail("Perda inexistente"); }need(p,"=");var i=lower(ir,texpr(p,0));need(p,";");
+            se (len(nshape(ir,i))>0) { fail("Reescrita nao escalar"); }
+            se (signature(ir,i)!=signature(ir,ir["perdas"][n])) {
+              put(cmd,"left",symbolic_node(ir,ir["perdas"][n]));put(cmd,"right",symbolic_node(ir,i));
+            }
+            put(ir["perdas"],n,i);put(ir["simbolos"],n,i);put(cmd,"tipo",kind);put(cmd,"nome",n);
+          }
+          senao {
+            se (kind=="provar" || kind=="teorema") {
+              var n="";se (kind=="teorema") { n=tname(p);need(p,"=");se (has(theorems,n) || has(ir["simbolos"],n)) { fail("Teorema redeclarado"); } }
+              var left=expand_proof(ir,texpr(p,0));need(p,"==");var right=expand_proof(ir,texpr(p,0));need(p,";");
+              put(cmd,"tipo",kind);put(cmd,"nome",n);put(cmd,"left",left);put(cmd,"right",right);se (kind=="teorema") { put(theorems,n,1); }
+            }
+            senao {
+              se (kind=="verificar") { var n=tname(p);need(p,";");se (!has(theorems,n)) { fail("Teorema inexistente"); }put(cmd,"tipo",kind);put(cmd,"nome",n); }
+              senao { fail("Comando desconhecido: "+kind); }
+            }
+          }
+        }
+      }
+    }
+    push(ir["comandos"],cmd);
+  }
+  retornar ir;
+}
+funcao compile_tensor(ir) {
+  var out=["#include \"tensor_runtime.h\"\nstatic V omega_graph(V state,V dirs,long lim){V vals=o_list();\n"];var i=0;
+  enquanto (i<len(ir["nos"])) {
+    var n=ir["nos"][i];var op=n["op"];var args=[];var j=0;
+    enquanto (j<len(n["args"])) { push(args,"v"+text(n["args"][j]));j=j+1; }
+    var e="";
+    se (op=="num") { e="d_num(o_num("+json(n["v"])+"))"; }
+    senao {
+      se (op=="param") { e="d_param(state,dirs,o_str("+json(n["nome"])+"),o_parsejson(o_str("+json(json(n["forma"]))+")))"; }
+      senao {
+        se (op=="zeros" || op=="identidade") { e="d_construct(o_str("+json(op)+"),o_parsejson(o_str("+json(json(n["forma"]))+")))"; }
+        senao {
+          se (op=="stack") { e="o_list()";var j=0;enquanto (j<len(args)) { e="o_push("+e+","+args[j]+")";j=j+1; } e="d_stack("+e+")"; }
+          senao {
+            var names=obj();put(names,"+","add");put(names,"-","sub");put(names,"*","mul");put(names,"/","div");put(names,"^","pow");put(names,"@","mm");put(names,"neg","neg");put(names,"relu","relu");put(names,"soma","sum");put(names,"transposta","transpose");put(names,"dot","dot");
+            e="d_"+names[op]+"("+join(args,",")+")";
+          }
+        }
+      }
+    }
+    push(out,"o_tick();V v"+text(i)+"="+e+";o_push(vals,v"+text(i)+");if(lim=="+text(i)+")return vals;\n");i=i+1;
+  }
+  push(out,"return vals;}\nint main(int argc,char **argv){o_init(argc,argv);return omega_tensor_main(omega_graph,o_parsejson(o_str("+json(json(ir))+")));}\n");retornar join(out,"");
+}
+funcao literal(nodes,i,q) { retornar nodes[i]["op"]=="num" && number(nodes[i]["v"])==q; }
+funcao rewrite_rule(n,nodes) {
+  var op=n["op"];var a=n["args"];
+  se (op=="+") { se (literal(nodes,a[0],0)) { retornar ["add_zero",a[1]]; }se (literal(nodes,a[1],0)) { retornar ["add_zero",a[0]]; } }
+  se (op=="-" && literal(nodes,a[1],0)) { retornar ["sub_zero",a[0]]; }
+  se (op=="*") { se (literal(nodes,a[0],1)) { retornar ["mul_one",a[1]]; }se (literal(nodes,a[1],1)) { retornar ["mul_one",a[0]]; } }
+  se (op=="/" && literal(nodes,a[1],1)) { retornar ["div_one",a[0]]; }
+  se (op=="^" && literal(nodes,a[1],1)) { retornar ["pow_one",a[0]]; }
+  se (op=="neg" && nodes[a[0]]["op"]=="neg") { retornar ["double_neg",nodes[a[0]]["args"][0]]; }
+  se (op=="transposta" && nodes[a[0]]["op"]=="transposta") { retornar ["double_transpose",nodes[a[0]]["args"][0]]; }
+  se (op=="relu" && nodes[a[0]]["op"]=="relu") { retornar ["relu_idem",a[0]]; }
+  retornar [];
+}
+funcao optimize(ir) {
+  var nodes=[];var mapping=[];var proofs=[];var i=0;
+  enquanto (i<len(ir["nos"])) {
+    var clone=parsejson(json(ir["nos"][i]));var args=[];var j=0;
+    enquanto (j<len(clone["args"])) { push(args,mapping[clone["args"][j]]);j=j+1; }
+    put(clone,"args",args);var rule=rewrite_rule(clone,nodes);
+    se (len(rule)>0) {
+      se (clone["forma"]!=nodes[rule[1]]["forma"]) { fail("Reescrita com forma divergente"); }
+      push(mapping,rule[1]);var entry=obj();put(entry,"indice",i);put(entry,"regra",rule[0]);put(entry,"resultado",rule[1]);push(proofs,entry);
+    } senao { push(mapping,len(nodes));push(nodes,clone); }
+    i=i+1;
+  }
+  var result=parsejson(json(ir));put(result,"nos",nodes);var labels=["simbolos","perdas"];i=0;
+  enquanto (i<len(labels)) { var map=result[labels[i]];var names=keys(map);var j=0;enquanto (j<len(names)) { put(map,names[j],mapping[map[names[j]]]);j=j+1; }i=i+1; }
+  i=0;enquanto (i<len(result["parametros"])) { var p=result["parametros"][i];put(p,"id",mapping[p["id"]]);put(p,"inicial",mapping[p["inicial"]]);i=i+1; }
+  i=0;enquanto (i<len(result["comandos"])) { var c=result["comandos"][i];se (has(c,"taxa")) { put(c,"taxa",mapping[c["taxa"]]); }i=i+1; }
+  var cert=obj();put(cert,"tipo","reescrita_ir");put(cert,"formato","omega-opt-cert-1");put(cert,"original",ir);put(cert,"otimizado",result);put(cert,"mapeamento",mapping);put(cert,"regras",proofs);retornar cert;
+}
+funcao refinement_source(source) {
+  var p=parser(source);var types=[];var bindings=[];var output=[];
+  enquanto (accept(p,"type")) {
+    var label=name(p);need(p,"=");var base=[];
+    enquanto (peek(p)!="where") { push(base,take(p)); }
+    need(p,"where");need(p,"{");var predicate=[];
+    enquanto (peek(p)!="}") { push(predicate,take(p)); }
+    need(p,"}");accept(p,";");var record=obj();put(record,"name",label);put(record,"base",base);put(record,"predicate",predicate);push(types,record);
+  }
+  enquanto (peek(p)!="<fim>") {
+    var item=take(p);push(output,item);
+    se (contains(["parametro","tensor","vetor","matriz","perda"],item)) {
+      var label=name(p);push(output,label);
+      se (accept(p,":")) { var record=obj();put(record,"kind",item);put(record,"name",label);put(record,"type",name(p));push(bindings,record); }
+    }
+  }
+  var result=obj();put(result,"format","omega-refinement-source-1");put(result,"types",types);put(result,"bindings",bindings);put(result,"source",join(output," "));retornar result;
+}
+funcao principal() {
+  se (argc()<3 || argc()>4) { fail("Uso: omegac fonte.omega destino [--ir|--optimize|--optimized-ir]"); }
+  var source=read(arg(1));var p=parser(source);
+  se (argc()==4 && arg(3)=="--refinement-ir") { write(arg(2),json(refinement_source(source)));retornar 0; }
+  se (peek(p)=="type") { fail("Refinement types require the proof-checking build frontend"); }
+  se (peek(p)=="funcao") { se (argc()!=3) { fail("Modo procedural nao aceita flags de IR tensorial"); }write(arg(2),compile_procedural(source)); }
+  senao {
+    var ir=tensor_ir(source);var mode="";se (argc()==4) { mode=arg(3); }
+    se (!contains(["","--ir","--optimize","--optimized-ir"],mode)) { fail("Modo desconhecido"); }
+    se (mode=="--optimize" || mode=="--optimized-ir") { var cert=optimize(ir);ir=cert["otimizado"];write(arg(2)+".opt.json",json(cert)); }
+    se (mode=="--ir" || mode=="--optimized-ir") { write(arg(2),json(ir)); }
+    senao { write(arg(2),compile_tensor(ir)); }
+  }
+  retornar 0;
+}

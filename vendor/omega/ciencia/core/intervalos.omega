@@ -1,0 +1,74 @@
+modulo science_intervals;
+importar "../../std/math.omega" como m;
+exportar box, point, add, sub, mul, div, scale, square, sqrt, exp, log, midpoint, encloses, intersect;
+funcao box(lo,hi)  {
+  se(lo>hi)  {
+    fail("Empty interval");
+  }
+  retornar [lo,hi];
+}
+funcao point(x)  {
+  retornar [x,x];
+}
+funcao add(a,b)  {
+  retornar [a[0]+b[0],a[1]+b[1]];
+}
+funcao sub(a,b)  {
+  retornar [a[0]-b[1],a[1]-b[0]];
+}
+funcao mul(a,b)  {
+  var p=[a[0]*b[0],a[0]*b[1],a[1]*b[0],a[1]*b[1]];
+  var lo=p[0];
+  var hi=lo;
+  var i=1;
+  enquanto(i<4)  {
+    lo=m::min(lo,p[i]);
+    hi=m::max(hi,p[i]);
+    i=i+1;
+  }
+  retornar [lo,hi];
+}
+funcao div(a,b)  {
+  se(b[0]<=0&&b[1]>=0)  {
+    fail("Interval divisor contains zero");
+  }
+  retornar mul(a,[1/b[1],1/b[0]]);
+}
+funcao scale(a,k)  {
+  retornar mul(a,[k,k]);
+}
+funcao square(a)  {
+  var hi=m::max(a[0]*a[0],a[1]*a[1]);
+  var lo=m::min(a[0]*a[0],a[1]*a[1]);
+  se(a[0]<=0&&a[1]>=0)  {
+    lo=0;
+  }
+  retornar [lo,hi];
+}
+funcao sqrt(a,bits)  {
+  se(a[0]<0)  {
+    fail("Square-root interval domain");
+  }
+  var lo=m::sqrt_interval(a[0],bits);
+  var hi=m::sqrt_interval(a[1],bits);
+  retornar [lo[0],hi[1]];
+}
+funcao exp(a,bits)  {
+  var lo=m::exp_interval(a[0],bits);
+  var hi=m::exp_interval(a[1],bits);
+  retornar [lo[0],hi[1]];
+}
+funcao log(a,bits)  {
+  var lo=m::log_interval(a[0],bits);
+  var hi=m::log_interval(a[1],bits);
+  retornar [lo[0],hi[1]];
+}
+funcao midpoint(a)  {
+  retornar (a[0]+a[1])/2;
+}
+funcao encloses(a,x)  {
+  retornar a[0]<=x&&x<=a[1];
+}
+funcao intersect(a,b)  {
+  retornar box(m::max(a[0],b[0]),m::min(a[1],b[1]));
+}

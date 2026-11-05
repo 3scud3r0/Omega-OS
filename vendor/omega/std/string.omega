@@ -1,0 +1,25 @@
+modulo string;
+exportar split, trim, starts_with, ends_with, replace, rational, format_q, canonical, as_list, as_object, as_string, as_number;
+funcao as_list(x){se(!islist(x)){fail("List required");}retornar x;}
+funcao as_object(x){se(isnum(x)||isstr(x)||islist(x)){fail("Object required");}retornar x;}
+funcao as_string(x){se(!isstr(x)){fail("String required");}retornar x;}
+funcao as_number(x){se(!isnum(x)){fail("Rational required");}retornar x;}
+funcao starts_with(s,prefix){retornar len(s)>=len(prefix)&&slice(s,0,len(prefix))==prefix;}
+funcao ends_with(s,suffix){retornar len(s)>=len(suffix)&&slice(s,len(s)-len(suffix),len(s))==suffix;}
+funcao split(s,delimiter){
+ se(len(delimiter)==0){fail("Nonempty delimiter required");}var out=[];var start=0;var i=0;
+ enquanto(i+len(delimiter)<=len(s)){se(slice(s,i,i+len(delimiter))==delimiter){push(out,slice(s,start,i));i=i+len(delimiter);start=i;}senao{i=i+1;}}
+ push(out,slice(s,start,len(s)));retornar out;
+}
+funcao trim(s){var lo=0;var hi=len(s);enquanto(lo<hi&&contains(" \t\r\n",s[lo])){lo=lo+1;}enquanto(hi>lo&&contains(" \t\r\n",s[hi-1])){hi=hi-1;}retornar slice(s,lo,hi);}
+funcao replace(s,old,value){retornar join(split(s,old),value);}
+funcao rational(s){var parts=split(s,"/");se(len(parts)==1){retornar number(s);}se(len(parts)!=2){fail("Rational text required");}var a=number(parts[0]);var b=number(parts[1]);se(qden(a)!=1||qden(b)!=1||b==0){fail("Invalid rational pair");}retornar a/b;}
+funcao format_q(x){retornar text(qnum(x))+"/"+text(qden(x));}
+// Canonical tagged document codec: numbers always retain their rational type.
+funcao canonical(x){
+ se(isnum(x)){retornar "[\"q\","+json(format_q(x))+"]";}
+ se(isstr(x)){retornar "[\"s\","+json(x)+"]";}
+ se(islist(x)){var items=[];var i=0;enquanto(i<len(x)){push(items,canonical(x[i]));i=i+1;}retornar "[\"a\",["+join(items,",")+"]]";}
+ var names=keys(x);var i=1;enquanto(i<len(names)){var j=i;enquanto(j>0&&names[j]<names[j-1]){var tmp=names[j];put(names,j,names[j-1]);put(names,j-1,tmp);j=j-1;}i=i+1;}
+ var items=[];i=0;enquanto(i<len(names)){var key=names[i];push(items,"["+json(key)+","+canonical(x[key])+"]");i=i+1;}retornar "[\"o\",["+join(items,",")+"]]";
+}

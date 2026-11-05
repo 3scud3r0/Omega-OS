@@ -16,6 +16,8 @@ def array(name):
     return bytes(int(x.strip(),0) for x in body.split(',') if x.strip())
 msg=array('capsule_message'); pub=array('authority_public'); signature=array('capsule_signature')
 assert verify(signature,pub,msg,len(msg))==0
+compiler=array('compiler_message');compiler_signature=array('compiler_signature')
+assert verify(compiler_signature,pub,compiler,len(compiler))==0
 for i in [0,16,20,len(msg)-1]:
     bad=bytearray(msg); bad[i]^=1; assert verify(signature,pub,bytes(bad),len(bad))!=0
 vm=lib.vm_verify; vm.argtypes=[C.c_char_p,C.c_size_t]; vm.restype=C.c_bool

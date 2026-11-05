@@ -1,0 +1,913 @@
+funcao om_mod_5_abs(x){
+se((x<0)){retornar (-x);}
+retornar x;
+}
+funcao om_mod_5_box(lo,hi){
+se((lo>hi)){fail("Invalid enclosure");}
+retornar [lo,hi];
+}
+funcao om_mod_5_ceil_q(x){
+retornar (-qfloor((-x)));
+}
+funcao om_mod_5_cos_interval(x,bits){
+var result=om_mod_5_trig_interval(x,bits);
+retornar (result)["cos"];
+}
+funcao om_mod_5_exp_interval(x,bits){
+var scale=om_mod_5_precision(bits);
+se((om_mod_5_abs(x)>32)){fail("Exponential domain is [-32,32]");}
+se((x==0)){retornar [1,1];}
+var u=om_mod_5_abs(x);
+var shifts=0;
+enquanto((u>1)){u=(u/2);
+shifts=(shifts+1);}
+scale=om_mod_5_pow_int(2,((bits+(2*om_mod_5_ceil_q(om_mod_5_abs(x))))+24));
+var n=((bits+(2*om_mod_5_ceil_q(om_mod_5_abs(x))))+32);
+var sum=0;
+var term=1;
+var fact=1;
+var i=0;
+enquanto((i<n)){sum=(sum+term);
+i=(i+1);
+term=((term*u)/i);
+fact=(fact*i);}
+var error=((n+1)/(fact*n));
+var interval=om_mod_5_rounded((sum-error),(sum+error),scale);
+i=0;
+enquanto((i<shifts)){interval=om_mod_5_rounded(((interval)[0]*(interval)[0]),((interval)[1]*(interval)[1]),scale);
+i=(i+1);}
+se((x<0)){se(((interval)[0]<=0)){fail("Unproved positive exponential");}
+interval=om_mod_5_rounded((1/(interval)[1]),(1/(interval)[0]),scale);}
+retornar interval;
+}
+funcao om_mod_5_floor_q(x){
+retornar qfloor(x);
+}
+funcao om_mod_5_log_interval(x,bits){
+var scale=om_mod_5_precision(bits);
+var bound=om_mod_5_pow_int(2,32);
+se((((x<=0)||(x<(1/bound)))||(x>bound))){fail("Log domain is [2^-32,2^32]");}
+se((x==1)){retornar [0,0];}
+var m=x;
+var k=0;
+enquanto((m>2)){m=(m/2);
+k=(k+1);}
+enquanto((m<1)){m=(m*2);
+k=(k-1);}
+var a=om_mod_5_log_unit(m,(bits+16));
+var b=om_mod_5_log_unit(2,(bits+16));
+var lo=(a)[0];
+var hi=(a)[1];
+se((k>=0)){lo=(lo+(k*(b)[0]));
+hi=(hi+(k*(b)[1]));}senao{lo=(lo+(k*(b)[1]));
+hi=(hi+(k*(b)[0]));}
+retornar om_mod_5_rounded(lo,hi,scale);
+}
+funcao om_mod_5_log_unit(x,n){
+var z=((x-1)/(x+1));
+var term=z;
+var sum=0;
+var i=1;
+enquanto((i<=n)){se(((i%2)==1)){sum=(sum+((2*term)/i));}
+term=(term*z);
+i=(i+1);}
+var error=((2*om_mod_5_abs(term))/(1-om_mod_5_abs(z)));
+retornar om_mod_5_box((sum-error),(sum+error));
+}
+funcao om_mod_5_max(a,b){
+se((a>b)){retornar a;}
+retornar b;
+}
+funcao om_mod_5_min(a,b){
+se((a<b)){retornar a;}
+retornar b;
+}
+funcao om_mod_5_pow_int(x,n){
+se(((((n%1)!=0)||(n<0))||(n>1024))){fail("Exponent budget");}
+var r=1;
+var i=0;
+enquanto((i<n)){r=(r*x);
+i=(i+1);}
+retornar r;
+}
+funcao om_mod_5_precision(bits){
+se(((((bits%1)!=0)||(bits<8))||(bits>128))){fail("Precision must be 8..128 bits");}
+retornar om_mod_5_pow_int(2,bits);
+}
+funcao om_mod_5_rounded(lo,hi,scale){
+retornar om_mod_5_box((qfloor((lo*scale))/scale),(om_mod_5_ceil_q((hi*scale))/scale));
+}
+funcao om_mod_5_sin_interval(x,bits){
+var result=om_mod_5_trig_interval(x,bits);
+retornar (result)["sin"];
+}
+funcao om_mod_5_sqrt_interval(x,bits){
+var scale=om_mod_5_precision(bits);
+se(((x<0)||(x>om_mod_5_pow_int(2,256)))){fail("Square root domain");}
+se((x==0)){retornar [0,0];}
+var hi=om_mod_5_max(1,x);
+var i=0;
+var lo=0;
+enquanto((i<1024)){var next=(om_mod_5_ceil_q((((hi+(x/hi))*scale)/2))/scale);
+se((next>=hi)){parar;}
+hi=next;
+i=(i+1);}
+lo=(qfloor(((x/hi)*scale))/scale);
+retornar om_mod_5_box(lo,hi);
+}
+funcao om_mod_5_times(a,b){
+var p=[((a)[0]*(b)[0]),((a)[0]*(b)[1]),((a)[1]*(b)[0]),((a)[1]*(b)[1])];
+var lo=(p)[0];
+var hi=lo;
+var i=1;
+enquanto((i<4)){lo=om_mod_5_min(lo,(p)[i]);
+hi=om_mod_5_max(hi,(p)[i]);
+i=(i+1);}
+retornar om_mod_5_box(lo,hi);
+}
+funcao om_mod_5_trig_interval(x,bits){
+om_mod_5_precision(bits);
+se((om_mod_5_abs(x)>32)){fail("Trigonometric domain is [-32,32]");}
+var shifts=(bits+14);
+var divisor=om_mod_5_pow_int(2,shifts);
+var u=(x/divisor);
+var scale=om_mod_5_pow_int(2,((bits+(2*shifts))+32));
+var error=((om_mod_5_pow_int(om_mod_5_abs(u),4)*5)/96);
+var s=om_mod_5_rounded(((u-(((u*u)*u)/6))-error),((u-(((u*u)*u)/6))+error),scale);
+var c=om_mod_5_rounded(((1-((u*u)/2))-error),((1-((u*u)/2))+error),scale);
+var i=0;
+enquanto((i<shifts)){var product=om_mod_5_times(s,c);
+var ss=om_mod_5_times(s,s);
+var cc=om_mod_5_times(c,c);
+s=om_mod_5_rounded(om_mod_5_max((-1),(2*(product)[0])),om_mod_5_min(1,(2*(product)[1])),scale);
+c=om_mod_5_rounded(om_mod_5_max((-1),((cc)[0]-(ss)[1])),om_mod_5_min(1,((cc)[1]-(ss)[0])),scale);
+i=(i+1);}
+var output=obj();
+put(output,"sin",s);
+put(output,"cos",c);
+put(output,"small_angle",u);
+put(output,"doublings",shifts);
+retornar output;
+}
+funcao om_mod_6_as_list(x){
+se((!islist(x))){fail("List required");}
+retornar x;
+}
+funcao om_mod_6_as_number(x){
+se((!isnum(x))){fail("Rational required");}
+retornar x;
+}
+funcao om_mod_6_as_object(x){
+se(((isnum(x)||isstr(x))||islist(x))){fail("Object required");}
+retornar x;
+}
+funcao om_mod_6_as_string(x){
+se((!isstr(x))){fail("String required");}
+retornar x;
+}
+funcao om_mod_6_canonical(x){
+se(isnum(x)){retornar (("[\"q\","+json(om_mod_6_format_q(x)))+"]");}
+se(isstr(x)){retornar (("[\"s\","+json(x))+"]");}
+se(islist(x)){var items=[];
+var i=0;
+enquanto((i<len(x))){push(items,om_mod_6_canonical((x)[i]));
+i=(i+1);}
+retornar (("[\"a\",["+join(items,","))+"]]");}
+var names=keys(x);
+var i=1;
+enquanto((i<len(names))){var j=i;
+enquanto(((j>0)&&((names)[j]<(names)[(j-1)]))){var tmp=(names)[j];
+put(names,j,(names)[(j-1)]);
+put(names,(j-1),tmp);
+j=(j-1);}
+i=(i+1);}
+var items=[];
+i=0;
+enquanto((i<len(names))){var key=(names)[i];
+push(items,(((("["+json(key))+",")+om_mod_6_canonical((x)[key]))+"]"));
+i=(i+1);}
+retornar (("[\"o\",["+join(items,","))+"]]");
+}
+funcao om_mod_6_ends_with(s,suffix){
+retornar ((len(s)>=len(suffix))&&(slice(s,(len(s)-len(suffix)),len(s))==suffix));
+}
+funcao om_mod_6_format_q(x){
+retornar ((text(qnum(x))+"/")+text(qden(x)));
+}
+funcao om_mod_6_rational(s){
+var parts=om_mod_6_split(s,"/");
+se((len(parts)==1)){retornar number(s);}
+se((len(parts)!=2)){fail("Rational text required");}
+var a=number((parts)[0]);
+var b=number((parts)[1]);
+se((((qden(a)!=1)||(qden(b)!=1))||(b==0))){fail("Invalid rational pair");}
+retornar (a/b);
+}
+funcao om_mod_6_replace(s,old,value){
+retornar join(om_mod_6_split(s,old),value);
+}
+funcao om_mod_6_split(s,delimiter){
+se((len(delimiter)==0)){fail("Nonempty delimiter required");}
+var out=[];
+var start=0;
+var i=0;
+enquanto(((i+len(delimiter))<=len(s))){se((slice(s,i,(i+len(delimiter)))==delimiter)){push(out,slice(s,start,i));
+i=(i+len(delimiter));
+start=i;}senao{i=(i+1);}}
+push(out,slice(s,start,len(s)));
+retornar out;
+}
+funcao om_mod_6_starts_with(s,prefix){
+retornar ((len(s)>=len(prefix))&&(slice(s,0,len(prefix))==prefix));
+}
+funcao om_mod_6_trim(s){
+var lo=0;
+var hi=len(s);
+enquanto(((lo<hi)&&contains(" \t\r\n",(s)[lo]))){lo=(lo+1);}
+enquanto(((hi>lo)&&contains(" \t\r\n",(s)[(hi-1)]))){hi=(hi-1);}
+retornar slice(s,lo,hi);
+}
+funcao om_mod_0_add(a,b){
+se((len(a)!=len(b))){fail("Vector sum shape");}
+var out=[];
+var i=0;
+enquanto((i<len(a))){push(out,om_mod_0_check(((a)[i]+(b)[i])));
+i=(i+1);}
+retornar out;
+}
+funcao om_mod_0_budget(n,limit){
+retornar om_mod_0_integer(n,0,limit);
+}
+funcao om_mod_0_check(v){
+se((qbits(v)>8192)){fail("Scientific rational bit budget exceeded");}
+retornar v;
+}
+funcao om_mod_0_copy(a){
+var out=[];
+var i=0;
+enquanto((i<len(a))){push(out,slice((a)[i],0,len((a)[i])));
+i=(i+1);}
+retornar out;
+}
+funcao om_mod_0_count(r,k,lo,hi){
+retornar om_mod_0_integer(om_mod_0_q(r,k),lo,hi);
+}
+funcao om_mod_0_determinant(raw){
+var a=om_mod_0_copy(raw);
+var n=len(a);
+se((n!=len((a)[0]))){fail("Square determinant shape");}
+var previous=1;
+var sign=1;
+var k=0;
+enquanto((k<(n-1))){var p=k;
+enquanto(((p<n)&&(((a)[p])[k]==0))){p=(p+1);}
+se((p==n)){retornar 0;}
+se((p!=k)){var row=(a)[p];
+put(a,p,(a)[k]);
+put(a,k,row);
+sign=(-sign);}
+var pivot=((a)[k])[k];
+var i=(k+1);
+enquanto((i<n)){var j=(k+1);
+enquanto((j<n)){put((a)[i],j,om_mod_0_check((((pivot*((a)[i])[j])-(((a)[i])[k]*((a)[k])[j]))/previous)));
+j=(j+1);}
+put((a)[i],k,0);
+i=(i+1);}
+previous=pivot;
+k=(k+1);}
+retornar (sign*((a)[(n-1)])[(n-1)]);
+}
+funcao om_mod_0_dot(a,b){
+se((len(a)!=len(b))){fail("Dot shape");}
+var v=0;
+var i=0;
+enquanto((i<len(a))){v=om_mod_0_check((v+((a)[i]*(b)[i])));
+i=(i+1);}
+retornar v;
+}
+funcao om_mod_0_eye(n){
+om_mod_0_integer(n,1,32);
+var a=[];
+var i=0;
+enquanto((i<n)){var row=om_mod_0_zeros(n);
+put(row,i,1);
+push(a,row);
+i=(i+1);}
+retornar a;
+}
+funcao om_mod_0_integer(x,lo,hi){
+se(((((!isnum(x))||(qden(x)!=1))||(x<lo))||(x>hi))){fail("Integer outside scientific domain/budget");}
+retornar x;
+}
+funcao om_mod_0_mat(raw){
+se(((((((!islist(raw))||(len(raw)<1))||(len(raw)>32))||(!islist((raw)[0])))||(len((raw)[0])<1))||(len((raw)[0])>33))){fail("Matrix shape/budget");}
+var a=[];
+var i=0;
+enquanto((i<len(raw))){var row=om_mod_0_vector((raw)[i]);
+se((len(row)!=len((raw)[0]))){fail("Ragged matrix");}
+push(a,row);
+i=(i+1);}
+retornar a;
+}
+funcao om_mod_0_mul(a,b){
+se((len((a)[0])!=len(b))){fail("Matrix product shape");}
+var bt=om_mod_0_transpose(b);
+var out=[];
+var i=0;
+enquanto((i<len(a))){var row=[];
+var j=0;
+enquanto((j<len(bt))){push(row,om_mod_0_dot((a)[i],(bt)[j]));
+j=(j+1);}
+push(out,row);
+i=(i+1);}
+retornar out;
+}
+funcao om_mod_0_nonnegative(x){
+se((x<0)){fail("Nonnegative quantity required");}
+retornar x;
+}
+funcao om_mod_0_num(r,k,fallback){
+se(has(r,k)){retornar om_mod_0_q(r,k);}
+retornar fallback;
+}
+funcao om_mod_0_orient(a,b,c){
+retornar ((((b)[0]-(a)[0])*((c)[1]-(a)[1]))-(((b)[1]-(a)[1])*((c)[0]-(a)[0])));
+}
+funcao om_mod_0_polynomial(coeffs,x){
+var y=0;
+var i=len(coeffs);
+enquanto((i>0)){i=(i-1);
+y=om_mod_0_check(((y*x)+(coeffs)[i]));}
+retornar y;
+}
+funcao om_mod_0_positive(x){
+se((x<=0)){fail("Strictly positive quantity required");}
+retornar x;
+}
+funcao om_mod_0_power(x,n){
+om_mod_0_integer(n,(-128),128);
+se((n<0)){se((x==0)){fail("Negative power of zero");}
+retornar (1/om_mod_0_power(x,(-n)));}
+var y=1;
+enquanto((n>0)){se(((n%2)==1)){y=om_mod_0_check((y*x));}
+n=qfloor((n/2));
+se((n>0)){x=om_mod_0_check((x*x));}}
+retornar y;
+}
+funcao om_mod_0_q(r,k){
+retornar om_mod_0_val((r)[k]);
+}
+funcao om_mod_0_rem_int(a,n){
+se((((qden(a)!=1)||(qden(n)!=1))||(n<=0))){fail("Integer remainder domain");}
+retornar (a-(n*qfloor((a/n))));
+}
+funcao om_mod_0_result(kind,value){
+var r=obj();
+put(r,"model",kind);
+put(r,"value",value);
+put(r,"formal_admission",0);
+retornar r;
+}
+funcao om_mod_0_rref(raw){
+var a=om_mod_0_copy(raw);
+var row=0;
+var col=0;
+var pivots=[];
+enquanto(((row<len(a))&&(col<len((a)[0])))){var p=row;
+enquanto(((p<len(a))&&(((a)[p])[col]==0))){p=(p+1);}
+se((p<len(a))){var t=(a)[row];
+put(a,row,(a)[p]);
+put(a,p,t);
+var d=((a)[row])[col];
+var j=0;
+enquanto((j<len((a)[0]))){put((a)[row],j,om_mod_0_check((((a)[row])[j]/d)));
+j=(j+1);}
+var i=0;
+enquanto((i<len(a))){se((i!=row)){var f=((a)[i])[col];
+j=0;
+enquanto((j<len((a)[0]))){put((a)[i],j,om_mod_0_check((((a)[i])[j]-(f*((a)[row])[j]))));
+j=(j+1);}}
+i=(i+1);}
+push(pivots,col);
+row=(row+1);}
+col=(col+1);}
+var out=obj();
+put(out,"matrix",a);
+put(out,"pivots",pivots);
+put(out,"rank",row);
+retornar out;
+}
+funcao om_mod_0_scale(a,x){
+var out=[];
+var i=0;
+enquanto((i<len(a))){push(out,om_mod_0_check(((a)[i]*x)));
+i=(i+1);}
+retornar out;
+}
+funcao om_mod_0_solve(a,b){
+var n=len(a);
+se(((n!=len((a)[0]))||(len(b)!=n))){fail("Square solve shape");}
+var augmented=om_mod_0_copy(a);
+var i=0;
+enquanto((i<n)){push((augmented)[i],(b)[i]);
+i=(i+1);}
+var reduced=om_mod_0_rref(augmented);
+se(((reduced)["rank"]!=n)){fail("Singular linear system");}
+var x=[];
+i=0;
+enquanto((i<n)){se((((reduced)["pivots"])[i]!=i)){fail("Inconsistent linear system");}
+push(x,(((reduced)["matrix"])[i])[n]);
+i=(i+1);}
+retornar x;
+}
+funcao om_mod_0_text_field(r,k,limit){
+var v=om_mod_6_as_string((r)[k]);
+se((len(v)>limit)){fail("Scientific text budget");}
+retornar v;
+}
+funcao om_mod_0_transpose(a){
+var out=[];
+var j=0;
+enquanto((j<len((a)[0]))){var row=[];
+var i=0;
+enquanto((i<len(a))){push(row,((a)[i])[j]);
+i=(i+1);}
+push(out,row);
+j=(j+1);}
+retornar out;
+}
+funcao om_mod_0_val(x){
+se(((!isnum(x))&&(!isstr(x)))){fail("Exact scalar required");}
+se((isstr(x)&&(len(x)>640))){fail("Scalar text budget");}
+retornar om_mod_0_check(om_mod_6_rational(text(x)));
+}
+funcao om_mod_0_vector(raw){
+se(((!islist(raw))||(len(raw)>1024))){fail("Vector budget/shape");}
+var a=[];
+var i=0;
+enquanto((i<len(raw))){push(a,om_mod_0_val((raw)[i]));
+i=(i+1);}
+retornar a;
+}
+funcao om_mod_0_zeros(n){
+om_mod_0_integer(n,0,1024);
+var a=[];
+var i=0;
+enquanto((i<n)){push(a,0);
+i=(i+1);}
+retornar a;
+}
+funcao om_mod_1_add(a,b){
+retornar [((a)[0]+(b)[0]),((a)[1]+(b)[1])];
+}
+funcao om_mod_1_box(lo,hi){
+se((lo>hi)){fail("Empty interval");}
+retornar [lo,hi];
+}
+funcao om_mod_1_div(a,b){
+se((((b)[0]<=0)&&((b)[1]>=0))){fail("Interval divisor contains zero");}
+retornar om_mod_1_mul(a,[(1/(b)[1]),(1/(b)[0])]);
+}
+funcao om_mod_1_encloses(a,x){
+retornar (((a)[0]<=x)&&(x<=(a)[1]));
+}
+funcao om_mod_1_exp(a,bits){
+var lo=om_mod_5_exp_interval((a)[0],bits);
+var hi=om_mod_5_exp_interval((a)[1],bits);
+retornar [(lo)[0],(hi)[1]];
+}
+funcao om_mod_1_intersect(a,b){
+retornar om_mod_1_box(om_mod_5_max((a)[0],(b)[0]),om_mod_5_min((a)[1],(b)[1]));
+}
+funcao om_mod_1_log(a,bits){
+var lo=om_mod_5_log_interval((a)[0],bits);
+var hi=om_mod_5_log_interval((a)[1],bits);
+retornar [(lo)[0],(hi)[1]];
+}
+funcao om_mod_1_midpoint(a){
+retornar (((a)[0]+(a)[1])/2);
+}
+funcao om_mod_1_mul(a,b){
+var p=[((a)[0]*(b)[0]),((a)[0]*(b)[1]),((a)[1]*(b)[0]),((a)[1]*(b)[1])];
+var lo=(p)[0];
+var hi=lo;
+var i=1;
+enquanto((i<4)){lo=om_mod_5_min(lo,(p)[i]);
+hi=om_mod_5_max(hi,(p)[i]);
+i=(i+1);}
+retornar [lo,hi];
+}
+funcao om_mod_1_point(x){
+retornar [x,x];
+}
+funcao om_mod_1_scale(a,k){
+retornar om_mod_1_mul(a,[k,k]);
+}
+funcao om_mod_1_sqrt(a,bits){
+se(((a)[0]<0)){fail("Square-root interval domain");}
+var lo=om_mod_5_sqrt_interval((a)[0],bits);
+var hi=om_mod_5_sqrt_interval((a)[1],bits);
+retornar [(lo)[0],(hi)[1]];
+}
+funcao om_mod_1_square(a){
+var hi=om_mod_5_max(((a)[0]*(a)[0]),((a)[1]*(a)[1]));
+var lo=om_mod_5_min(((a)[0]*(a)[0]),((a)[1]*(a)[1]));
+se((((a)[0]<=0)&&((a)[1]>=0))){lo=0;}
+retornar [lo,hi];
+}
+funcao om_mod_1_sub(a,b){
+retornar [((a)[0]-(b)[1]),((a)[1]-(b)[0])];
+}
+funcao om_mod_3_apply(a,x){
+var y=[];
+var i=0;
+enquanto((i<len(a))){push(y,om_mod_0_dot((a)[i],x));
+i=(i+1);}
+retornar y;
+}
+funcao om_mod_3_entropy(p,bits){
+var h=[0,0];
+var i=0;
+enquanto((i<len(p))){se(((p)[i]>0)){h=om_mod_1_add(h,om_mod_1_scale(om_mod_5_log_interval((p)[i],bits),(-(p)[i])));}
+i=(i+1);}
+retornar h;
+}
+funcao om_mod_3_inverse(a){
+se((len(a)!=len((a)[0]))){fail("Square inverse required");}
+var columns=[];
+var i=0;
+enquanto((i<len(a))){var e=om_mod_0_zeros(len(a));
+put(e,i,1);
+push(columns,om_mod_0_solve(a,e));
+i=(i+1);}
+retornar om_mod_0_transpose(columns);
+}
+funcao om_mod_3_matrix_add(a,b){
+se(((len(a)!=len(b))||(len((a)[0])!=len((b)[0])))){fail("Matrix sum shape");}
+var c=[];
+var i=0;
+enquanto((i<len(a))){push(c,om_mod_0_add((a)[i],(b)[i]));
+i=(i+1);}
+retornar c;
+}
+funcao om_mod_3_maxabs(a){
+var v=0;
+var i=0;
+enquanto((i<len(a))){v=om_mod_5_max(v,om_mod_5_abs((a)[i]));
+i=(i+1);}
+retornar v;
+}
+funcao om_mod_3_norm2(a){
+retornar om_mod_0_dot(a,a);
+}
+funcao om_mod_3_poly_add(a,b){
+var c=[];
+var i=0;
+enquanto((i<len(a))){om_mod_3_poly_insert(c,((a)[i])[0],((a)[i])[1]);
+i=(i+1);}
+i=0;
+enquanto((i<len(b))){om_mod_3_poly_insert(c,((b)[i])[0],((b)[i])[1]);
+i=(i+1);}
+retornar om_mod_3_poly_clean(c);
+}
+funcao om_mod_3_poly_clean(p){
+var out=[];
+var i=0;
+enquanto((i<len(p))){se((((p)[i])[0]!=0)){push(out,(p)[i]);}
+i=(i+1);}
+i=1;
+enquanto((i<len(out))){var j=i;
+enquanto((j>0)){var k=0;
+enquanto(((k<len(((out)[j])[1]))&&((((out)[j])[1])[k]==(((out)[(j-1)])[1])[k]))){k=(k+1);}
+se(((k==len(((out)[j])[1]))||((((out)[j])[1])[k]>=(((out)[(j-1)])[1])[k]))){j=0;}senao{var t=(out)[j];
+put(out,j,(out)[(j-1)]);
+put(out,(j-1),t);
+j=(j-1);}}
+i=(i+1);}
+retornar out;
+}
+funcao om_mod_3_poly_const(c,n){
+se((c==0)){retornar [];}
+retornar [[om_mod_0_check(c),om_mod_0_zeros(n)]];
+}
+funcao om_mod_3_poly_diff(p,i){
+var out=[];
+var j=0;
+enquanto((j<len(p))){var e=slice(((p)[j])[1],0,len(((p)[j])[1]));
+se(((i<0)||(i>=len(e)))){fail("Derivative variable outside polynomial");}
+se(((e)[i]>0)){var c=om_mod_0_check((((p)[j])[0]*(e)[i]));
+put(e,i,((e)[i]-1));
+om_mod_3_poly_insert(out,c,e);}
+j=(j+1);}
+retornar om_mod_3_poly_clean(out);
+}
+funcao om_mod_3_poly_eval(p,x){
+var v=0;
+var i=0;
+enquanto((i<len(p))){se((len(((p)[i])[1])!=len(x))){fail("Polynomial evaluation dimension");}
+var t=((p)[i])[0];
+var j=0;
+enquanto((j<len(x))){t=om_mod_0_check((t*om_mod_0_power((x)[j],(((p)[i])[1])[j])));
+j=(j+1);}
+v=om_mod_0_check((v+t));
+i=(i+1);}
+retornar v;
+}
+funcao om_mod_3_poly_extend(p,n){
+var out=[];
+var i=0;
+enquanto((i<len(p))){var e=slice(((p)[i])[1],0,len(((p)[i])[1]));
+se((len(e)>n)){fail("Cannot discard polynomial variables");}
+enquanto((len(e)<n)){push(e,0);}
+push(out,[((p)[i])[0],e]);
+i=(i+1);}
+retornar out;
+}
+funcao om_mod_3_poly_insert(p,c,e){
+om_mod_0_check(c);
+se((c==0)){retornar p;}
+var i=0;
+enquanto((i<len(p))){se(om_mod_3_same(((p)[i])[1],e)){put((p)[i],0,om_mod_0_check((((p)[i])[0]+c)));
+retornar p;}
+i=(i+1);}
+se((len(p)>=512)){fail("Sparse polynomial term budget");}
+push(p,[c,slice(e,0,len(e))]);
+retornar p;
+}
+funcao om_mod_3_poly_mul(a,b){
+var c=[];
+var i=0;
+enquanto((i<len(a))){var j=0;
+enquanto((j<len(b))){var e=om_mod_0_add(((a)[i])[1],((b)[j])[1]);
+var k=0;
+var degree=0;
+enquanto((k<len(e))){degree=(degree+(e)[k]);
+k=(k+1);}
+se((degree>24)){fail("Intermediate polynomial degree budget");}
+om_mod_3_poly_insert(c,om_mod_0_check((((a)[i])[0]*((b)[j])[0])),e);
+j=(j+1);}
+i=(i+1);}
+retornar om_mod_3_poly_clean(c);
+}
+funcao om_mod_3_poly_power(p,k,n){
+om_mod_0_integer(k,0,12);
+var q=om_mod_3_poly_const(1,n);
+var i=0;
+enquanto((i<k)){q=om_mod_3_poly_mul(q,p);
+i=(i+1);}
+retornar q;
+}
+funcao om_mod_3_poly_read(raw,n){
+om_mod_0_integer(n,1,16);
+se(((!islist(raw))||(len(raw)>256))){fail("Sparse polynomial input budget");}
+var p=[];
+var i=0;
+enquanto((i<len(raw))){se(((!islist((raw)[i]))||(len((raw)[i])!=2))){fail("Polynomial term [coefficient, exponents]");}
+var e=om_mod_0_vector(((raw)[i])[1]);
+se((len(e)!=n)){fail("Polynomial exponent dimension");}
+var degree=0;
+var j=0;
+enquanto((j<n)){om_mod_0_integer((e)[j],0,12);
+degree=(degree+(e)[j]);
+j=(j+1);}
+se((degree>12)){fail("Polynomial total degree budget");}
+om_mod_3_poly_insert(p,om_mod_0_val(((raw)[i])[0]),e);
+i=(i+1);}
+retornar om_mod_3_poly_clean(p);
+}
+funcao om_mod_3_poly_scale(a,x){
+var c=[];
+var i=0;
+enquanto((i<len(a))){om_mod_3_poly_insert(c,om_mod_0_check((((a)[i])[0]*x)),((a)[i])[1]);
+i=(i+1);}
+retornar om_mod_3_poly_clean(c);
+}
+funcao om_mod_3_poly_text(p){
+var code="0";
+var i=0;
+enquanto((i<len(p))){var term=(("("+text(((p)[i])[0]))+")");
+var j=0;
+enquanto((j<len(((p)[i])[1]))){var k=0;
+enquanto((k<(((p)[i])[1])[j])){term=(((term+"*x[")+text(j))+"]");
+k=(k+1);}
+j=(j+1);}
+code=(((code+"+(")+term)+")");
+i=(i+1);}
+retornar code;
+}
+funcao om_mod_3_poly_var(i,n){
+om_mod_0_integer(i,0,(n-1));
+var e=om_mod_0_zeros(n);
+put(e,i,1);
+retornar [[1,e]];
+}
+funcao om_mod_3_probability(raw){
+var p=om_mod_0_vector(raw);
+se(((len(p)<1)||(len(p)>256))){fail("Probability vector size");}
+var total=0;
+var i=0;
+enquanto((i<len(p))){om_mod_0_nonnegative((p)[i]);
+total=(total+(p)[i]);
+i=(i+1);}
+se((total!=1)){fail("Probability mass must sum exactly to one");}
+retornar p;
+}
+funcao om_mod_3_same(a,b){
+se((len(a)!=len(b))){retornar 0;}
+var i=0;
+enquanto((i<len(a))){se(((a)[i]!=(b)[i])){retornar 0;}
+i=(i+1);}
+retornar 1;
+}
+funcao om_mod_3_symmetric_positive(a){
+var n=len(a);
+se((((n<1)||(n>16))||(len((a)[0])!=n))){fail("SPD matrix dimension 1..16");}
+var i=0;
+enquanto((i<n)){var principal=[];
+var j=0;
+enquanto((j<n)){se((((a)[i])[j]!=((a)[j])[i])){fail("Symmetric matrix required");}
+se((j<=i)){push(principal,slice((a)[j],0,(i+1)));}
+j=(j+1);}
+se((om_mod_0_determinant(principal)<=0)){fail("Positive-definite matrix required");}
+i=(i+1);}
+retornar 1;
+}
+funcao om_mod_4_as_polynomial(ast,n){
+se(((ast)[0]=="const")){retornar om_mod_3_poly_const(om_mod_0_val((ast)[1]),n);}
+se(((ast)[0]=="var")){retornar om_mod_3_poly_var(om_mod_0_val((ast)[1]),n);}
+var left=om_mod_4_as_polynomial((ast)[1],n);
+var right=om_mod_4_as_polynomial((ast)[2],n);
+se(((ast)[0]=="add")){retornar om_mod_3_poly_add(left,right);}
+retornar om_mod_3_poly_mul(left,right);
+}
+funcao om_mod_4_execute(r){
+var variables=om_mod_0_count(r,"variables",1,8);
+var rounds=om_mod_0_integer(om_mod_0_num(r,"rounds",8),1,32);
+var g=obj();
+put(g,"nodes",[]);
+put(g,"parent",[]);
+put(g,"ledger",[]);
+put(g,"limited",0);
+put(g,"limit",om_mod_0_integer(om_mod_0_num(r,"max_nodes",256),16,1024));
+var entry=om_mod_4_ingest(g,(r)["expression"],variables,0,[0]);
+var iteration=0;
+var saturated=0;
+enquanto((((iteration<rounds)&&(!(g)["limited"]))&&(!saturated))){var size=len((g)["nodes"]);
+var changed=0;
+var i=0;
+enquanto(((i<size)&&(!(g)["limited"]))){changed=(changed+om_mod_4_rewrite(g,i));
+i=(i+1);}
+changed=(changed+om_mod_4_rebuild(g));
+saturated=((changed==0)&&(len((g)["nodes"])==size));
+iteration=(iteration+1);}
+var costs=[];
+var best=[];
+var i=0;
+enquanto((i<len((g)["nodes"]))){push(costs,1000000);
+push(best,(-1));
+i=(i+1);}
+var changed=1;
+var passes=0;
+enquanto((changed&&(passes<=len((g)["nodes"])))){changed=0;
+i=0;
+enquanto((i<len((g)["nodes"]))){var node=((g)["nodes"])[i];
+var cost=1;
+var j=0;
+enquanto((j<len((node)[2]))){cost=(cost+(costs)[om_mod_4_root(g,((node)[2])[j])]);
+j=(j+1);}
+var class=om_mod_4_root(g,i);
+se((cost<(costs)[class])){put(costs,class,cost);
+put(best,class,i);
+changed=1;}
+i=(i+1);}
+passes=(passes+1);}
+se(((best)[om_mod_4_root(g,entry)]<0)){fail("Egraph has no finite extraction");}
+var expression=om_mod_4_extracted(g,entry,best,0);
+var original=om_mod_4_as_polynomial((r)["expression"],variables);
+var equivalent=om_mod_4_as_polynomial(expression,variables);
+se((len(om_mod_3_poly_add(original,om_mod_3_poly_scale(equivalent,(-1))))!=0)){fail("Extracted expression polynomial equivalence failed");}
+var out=om_mod_0_result("bounded-ring-egraph-saturation",expression);
+put(out,"nodes",len((g)["nodes"]));
+put(out,"cost",(costs)[om_mod_4_root(g,entry)]);
+put(out,"ledger",(g)["ledger"]);
+put(out,"saturated",saturated);
+put(out,"budget_limited",((g)["limited"]||((!saturated)&&(iteration==rounds))));
+put(out,"polynomial_equivalence_checked",1);
+put(out,"global_optimum_claimed",0);
+retornar out;
+}
+funcao om_mod_4_extracted(g,id,best,depth){
+se((depth>128)){fail("Egraph extraction depth budget");}
+var node=((g)["nodes"])[(best)[om_mod_4_root(g,id)]];
+se((((node)[0]=="const")||((node)[0]=="var"))){retornar [(node)[0],(node)[1]];}
+retornar [(node)[0],om_mod_4_extracted(g,((node)[2])[0],best,(depth+1)),om_mod_4_extracted(g,((node)[2])[1],best,(depth+1))];
+}
+funcao om_mod_4_ingest(g,ast,variables,depth,meter){
+put(meter,0,((meter)[0]+1));
+se(((((depth>24)||((meter)[0]>128))||(!islist(ast)))||(len(ast)<1))){fail("Egraph input AST budget");}
+var op=(ast)[0];
+var id=(-1);
+se(((op=="const")&&(len(ast)==2))){id=om_mod_4_intern(g,op,om_mod_0_val((ast)[1]),[]);}senao{se(((op=="var")&&(len(ast)==2))){id=om_mod_4_intern(g,op,om_mod_0_integer(om_mod_0_val((ast)[1]),0,(variables-1)),[]);}senao{se((((op!="add")&&(op!="mul"))||(len(ast)!=3))){fail("Egraph supports const, var, add, mul with exact arity");}
+var left=om_mod_4_ingest(g,(ast)[1],variables,(depth+1),meter);
+var right=om_mod_4_ingest(g,(ast)[2],variables,(depth+1),meter);
+id=om_mod_4_intern(g,op,0,[left,right]);}}
+se((id<0)){fail("Input exceeds egraph node capacity");}
+retornar id;
+}
+funcao om_mod_4_intern(g,op,payload,children){
+var canonical=[];
+var j=0;
+enquanto((j<len(children))){push(canonical,om_mod_4_root(g,(children)[j]));
+j=(j+1);}
+var nodes=(g)["nodes"];
+var i=0;
+enquanto((i<len(nodes))){se((((((nodes)[i])[0]==op)&&(((nodes)[i])[1]==payload))&&(len(((nodes)[i])[2])==len(canonical)))){var equal=1;
+j=0;
+enquanto((j<len(canonical))){se((om_mod_4_root(g,(((nodes)[i])[2])[j])!=(canonical)[j])){equal=0;}
+j=(j+1);}
+se(equal){retornar i;}}
+i=(i+1);}
+se((len(nodes)>=(g)["limit"])){put(g,"limited",1);
+retornar (-1);}
+var id=len(nodes);
+push(nodes,[op,payload,canonical]);
+push((g)["parent"],id);
+retornar id;
+}
+funcao om_mod_4_matching(g,id,op){
+var i=0;
+enquanto((i<len((g)["nodes"]))){se(((om_mod_4_root(g,i)==om_mod_4_root(g,id))&&((((g)["nodes"])[i])[0]==op))){retornar i;}
+i=(i+1);}
+retornar (-1);
+}
+funcao om_mod_4_merge(g,x,y,rule){
+se(((x<0)||(y<0))){retornar 0;}
+var rx=om_mod_4_root(g,x);
+var ry=om_mod_4_root(g,y);
+se((rx==ry)){retornar 0;}
+se((rx>ry)){var t=rx;
+rx=ry;
+ry=t;}
+put((g)["parent"],ry,rx);
+push((g)["ledger"],[rule,x,y]);
+retornar 1;
+}
+funcao om_mod_4_rebuild(g){
+var changed=0;
+var i=0;
+enquanto((i<len((g)["nodes"]))){var node=((g)["nodes"])[i];
+var j=0;
+enquanto((j<i)){var other=((g)["nodes"])[j];
+se(((((node)[0]==(other)[0])&&((node)[1]==(other)[1]))&&(len((node)[2])==len((other)[2])))){var equal=1;
+var k=0;
+enquanto((k<len((node)[2]))){se((om_mod_4_root(g,((node)[2])[k])!=om_mod_4_root(g,((other)[2])[k]))){equal=0;}
+k=(k+1);}
+se(equal){changed=(changed+om_mod_4_merge(g,i,j,"congruence"));}}
+j=(j+1);}
+i=(i+1);}
+retornar changed;
+}
+funcao om_mod_4_rewrite(g,id){
+var node=((g)["nodes"])[id];
+var op=(node)[0];
+var changed=0;
+se(((op!="add")&&(op!="mul"))){retornar 0;}
+var x=((node)[2])[0];
+var y=((node)[2])[1];
+var xc=om_mod_4_matching(g,x,"const");
+var yc=om_mod_4_matching(g,y,"const");
+se(((xc>=0)&&(yc>=0))){var value=((((g)["nodes"])[xc])[1]+(((g)["nodes"])[yc])[1]);
+se((op=="mul")){value=((((g)["nodes"])[xc])[1]*(((g)["nodes"])[yc])[1]);}
+changed=(changed+om_mod_4_merge(g,id,om_mod_4_intern(g,"const",om_mod_0_check(value),[]),"constant-fold"));}
+se((yc>=0)){var value=(((g)["nodes"])[yc])[1];
+se((((op=="add")&&(value==0))||((op=="mul")&&(value==1)))){changed=(changed+om_mod_4_merge(g,id,x,"identity"));}
+se(((op=="mul")&&(value==0))){changed=(changed+om_mod_4_merge(g,id,y,"annihilator"));}}
+se((xc>=0)){var value=(((g)["nodes"])[xc])[1];
+se((((op=="add")&&(value==0))||((op=="mul")&&(value==1)))){changed=(changed+om_mod_4_merge(g,id,y,"identity"));}
+se(((op=="mul")&&(value==0))){changed=(changed+om_mod_4_merge(g,id,x,"annihilator"));}}
+changed=(changed+om_mod_4_merge(g,id,om_mod_4_intern(g,op,0,[y,x]),"commute"));
+var nested=om_mod_4_matching(g,x,op);
+se((nested>=0)){var children=(((g)["nodes"])[nested])[2];
+var inner=om_mod_4_intern(g,op,0,[(children)[1],y]);
+se((inner>=0)){changed=(changed+om_mod_4_merge(g,id,om_mod_4_intern(g,op,0,[(children)[0],inner]),"associate"));}}
+se((op=="mul")){var sum=om_mod_4_matching(g,y,"add");
+se((sum>=0)){var children=(((g)["nodes"])[sum])[2];
+var left=om_mod_4_intern(g,"mul",0,[x,(children)[0]]);
+var right=om_mod_4_intern(g,"mul",0,[x,(children)[1]]);
+se(((left>=0)&&(right>=0))){changed=(changed+om_mod_4_merge(g,id,om_mod_4_intern(g,"add",0,[left,right]),"distribute"));}}}
+retornar changed;
+}
+funcao om_mod_4_root(g,id){
+var p=(g)["parent"];
+enquanto(((p)[id]!=id)){put(p,id,(p)[(p)[id]]);
+id=(p)[id];}
+retornar id;
+}
+funcao principal(){
+var r=obj();
+put(r,"variables",1);
+put(r,"rounds",4);
+put(r,"max_nodes",64);
+put(r,"expression",["add",["var",0],["const",0]]);
+retornar om_mod_4_execute(r);
+}

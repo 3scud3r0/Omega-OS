@@ -1,0 +1,155 @@
+modulo egraph_engine;
+importar "../ciencia/core/exato.omega" como u;
+importar "algebra.omega" como a;
+exportar execute;
+
+# Finite e-graph with union-find, congruence rebuilding, guarded ring rewrites,
+# cost extraction and independent sparse-polynomial equivalence checking.
+# Saturation can be exponential; hitting a budget is reported, not called optimal.
+funcao root(g,id) {
+  var p=g["parent"];
+  enquanto(p[id]!=id) { put(p,id,p[p[id]]); id=p[id]; }
+  retornar id;
+}
+funcao merge(g,x,y,rule) {
+  se(x<0||y<0) { retornar 0; }
+  var rx=root(g,x); var ry=root(g,y);
+  se(rx==ry) { retornar 0; }
+  se(rx>ry) { var t=rx; rx=ry; ry=t; }
+  put(g["parent"],ry,rx); push(g["ledger"],[rule,x,y]); retornar 1;
+}
+funcao intern(g,op,payload,children) {
+  var canonical=[]; var j=0;
+  enquanto(j<len(children)) { push(canonical,root(g,children[j])); j=j+1; }
+  var nodes=g["nodes"]; var i=0;
+  enquanto(i<len(nodes)) {
+    se(nodes[i][0]==op&&nodes[i][1]==payload&&len(nodes[i][2])==len(canonical)) {
+      var equal=1; j=0;
+      enquanto(j<len(canonical)) { se(root(g,nodes[i][2][j])!=canonical[j]) { equal=0; } j=j+1; }
+      se(equal) { retornar i; }
+    }
+    i=i+1;
+  }
+  se(len(nodes)>=g["limit"]) { put(g,"limited",1); retornar -1; }
+  var id=len(nodes); push(nodes,[op,payload,canonical]); push(g["parent"],id); retornar id;
+}
+funcao ingest(g,ast,variables,depth,meter) {
+  put(meter,0,meter[0]+1);
+  se(depth>24||meter[0]>128||!islist(ast)||len(ast)<1) { fail("Egraph input AST budget"); }
+  var op=ast[0]; var id=-1;
+  se(op=="const"&&len(ast)==2) { id=intern(g,op,u::val(ast[1]),[]); }
+  senao {
+    se(op=="var"&&len(ast)==2) { id=intern(g,op,u::integer(u::val(ast[1]),0,variables-1),[]); }
+    senao {
+      se((op!="add"&&op!="mul")||len(ast)!=3) { fail("Egraph supports const, var, add, mul with exact arity"); }
+      var left=ingest(g,ast[1],variables,depth+1,meter); var right=ingest(g,ast[2],variables,depth+1,meter);
+      id=intern(g,op,0,[left,right]);
+    }
+  }
+  se(id<0) { fail("Input exceeds egraph node capacity"); }
+  retornar id;
+}
+funcao matching(g,id,op) {
+  var i=0;
+  enquanto(i<len(g["nodes"])) {
+    se(root(g,i)==root(g,id)&&g["nodes"][i][0]==op) { retornar i; } i=i+1;
+  }
+  retornar -1;
+}
+funcao rebuild(g) {
+  var changed=0; var i=0;
+  enquanto(i<len(g["nodes"])) {
+    var node=g["nodes"][i]; var j=0;
+    enquanto(j<i) {
+      var other=g["nodes"][j];
+      se(node[0]==other[0]&&node[1]==other[1]&&len(node[2])==len(other[2])) {
+        var equal=1; var k=0;
+        enquanto(k<len(node[2])) { se(root(g,node[2][k])!=root(g,other[2][k])) { equal=0; } k=k+1; }
+        se(equal) { changed=changed+merge(g,i,j,"congruence"); }
+      }
+      j=j+1;
+    }
+    i=i+1;
+  }
+  retornar changed;
+}
+funcao rewrite(g,id) {
+  var node=g["nodes"][id]; var op=node[0]; var changed=0;
+  se(op!="add"&&op!="mul") { retornar 0; }
+  var x=node[2][0]; var y=node[2][1]; var xc=matching(g,x,"const"); var yc=matching(g,y,"const");
+  se(xc>=0&&yc>=0) {
+    var value=g["nodes"][xc][1]+g["nodes"][yc][1];
+    se(op=="mul") { value=g["nodes"][xc][1]*g["nodes"][yc][1]; }
+    changed=changed+merge(g,id,intern(g,"const",u::check(value),[]),"constant-fold");
+  }
+  se(yc>=0) {
+    var value=g["nodes"][yc][1];
+    se((op=="add"&&value==0)||(op=="mul"&&value==1)) { changed=changed+merge(g,id,x,"identity"); }
+    se(op=="mul"&&value==0) { changed=changed+merge(g,id,y,"annihilator"); }
+  }
+  se(xc>=0) {
+    var value=g["nodes"][xc][1];
+    se((op=="add"&&value==0)||(op=="mul"&&value==1)) { changed=changed+merge(g,id,y,"identity"); }
+    se(op=="mul"&&value==0) { changed=changed+merge(g,id,x,"annihilator"); }
+  }
+  changed=changed+merge(g,id,intern(g,op,0,[y,x]),"commute");
+  var nested=matching(g,x,op);
+  se(nested>=0) {
+    var children=g["nodes"][nested][2]; var inner=intern(g,op,0,[children[1],y]);
+    se(inner>=0) { changed=changed+merge(g,id,intern(g,op,0,[children[0],inner]),"associate"); }
+  }
+  se(op=="mul") {
+    var sum=matching(g,y,"add");
+    se(sum>=0) {
+      var children=g["nodes"][sum][2]; var left=intern(g,"mul",0,[x,children[0]]); var right=intern(g,"mul",0,[x,children[1]]);
+      se(left>=0&&right>=0) { changed=changed+merge(g,id,intern(g,"add",0,[left,right]),"distribute"); }
+    }
+  }
+  retornar changed;
+}
+funcao extracted(g,id,best,depth) {
+  se(depth>128) { fail("Egraph extraction depth budget"); }
+  var node=g["nodes"][best[root(g,id)]];
+  se(node[0]=="const"||node[0]=="var") { retornar [node[0],node[1]]; }
+  retornar [node[0],extracted(g,node[2][0],best,depth+1),extracted(g,node[2][1],best,depth+1)];
+}
+funcao as_polynomial(ast,n) {
+  se(ast[0]=="const") { retornar a::poly_const(u::val(ast[1]),n); }
+  se(ast[0]=="var") { retornar a::poly_var(u::val(ast[1]),n); }
+  var left=as_polynomial(ast[1],n); var right=as_polynomial(ast[2],n);
+  se(ast[0]=="add") { retornar a::poly_add(left,right); }
+  retornar a::poly_mul(left,right);
+}
+funcao execute(r) {
+  var variables=u::count(r,"variables",1,8); var rounds=u::integer(u::num(r,"rounds",8),1,32);
+  var g=obj(); put(g,"nodes",[]); put(g,"parent",[]); put(g,"ledger",[]); put(g,"limited",0);
+  put(g,"limit",u::integer(u::num(r,"max_nodes",256),16,1024));
+  var entry=ingest(g,r["expression"],variables,0,[0]); var iteration=0; var saturated=0;
+  enquanto(iteration<rounds&&!g["limited"]&&!saturated) {
+    var size=len(g["nodes"]); var changed=0; var i=0;
+    enquanto(i<size&&!g["limited"]) { changed=changed+rewrite(g,i); i=i+1; }
+    changed=changed+rebuild(g); saturated=changed==0&&len(g["nodes"])==size; iteration=iteration+1;
+  }
+  var costs=[]; var best=[]; var i=0;
+  enquanto(i<len(g["nodes"])) { push(costs,1000000); push(best,-1); i=i+1; }
+  var changed=1; var passes=0;
+  enquanto(changed&&passes<=len(g["nodes"])) {
+    changed=0; i=0;
+    enquanto(i<len(g["nodes"])) {
+      var node=g["nodes"][i]; var cost=1; var j=0;
+      enquanto(j<len(node[2])) { cost=cost+costs[root(g,node[2][j])]; j=j+1; }
+      var class=root(g,i);
+      se(cost<costs[class]) { put(costs,class,cost); put(best,class,i); changed=1; }
+      i=i+1;
+    }
+    passes=passes+1;
+  }
+  se(best[root(g,entry)]<0) { fail("Egraph has no finite extraction"); }
+  var expression=extracted(g,entry,best,0);
+  var original=as_polynomial(r["expression"],variables); var equivalent=as_polynomial(expression,variables);
+  se(len(a::poly_add(original,a::poly_scale(equivalent,-1)))!=0) { fail("Extracted expression polynomial equivalence failed"); }
+  var out=u::result("bounded-ring-egraph-saturation",expression);
+  put(out,"nodes",len(g["nodes"])); put(out,"cost",costs[root(g,entry)]); put(out,"ledger",g["ledger"]);
+  put(out,"saturated",saturated); put(out,"budget_limited",g["limited"]||(!saturated&&iteration==rounds));
+  put(out,"polynomial_equivalence_checked",1); put(out,"global_optimum_claimed",0); retornar out;
+}

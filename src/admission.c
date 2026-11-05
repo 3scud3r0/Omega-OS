@@ -18,3 +18,13 @@ const uint8_t *admission_code(size_t *length) {
  uart_puts("TEST Ed25519 external signature + tamper rejection + typed stack VM PASS\n");
  *length=n; return m+24;
 }
+
+const uint8_t *admission_compiler(size_t *length) {
+ uint32_t n,v; static const uint8_t domain[16]="OMEGA-COMPILER3";
+ if(sizeof compiler_message<24) panic("compiler capsule size");
+ for(unsigned i=0;i<16;i++) if(compiler_message[i]!=domain[i]) panic("compiler capsule domain");
+ memcpy(&n,compiler_message+16,4);memcpy(&v,compiler_message+20,4);
+ if(n>256*1024||24ULL+n+v!=sizeof compiler_message||!vm_verify(compiler_message+24+n,v)||
+    crypto_ed25519_check(compiler_signature,authority_public,compiler_message,sizeof compiler_message)) panic("compiler authority admission");
+ *length=n;return compiler_message+24;
+}

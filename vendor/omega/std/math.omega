@@ -1,0 +1,55 @@
+modulo math;
+exportar abs, min, max, pow_int, floor_q, ceil_q, sqrt_interval, exp_interval, log_interval, trig_interval, sin_interval, cos_interval;
+funcao abs(x){se(x<0){retornar -x;}retornar x;}
+funcao min(a,b){se(a<b){retornar a;}retornar b;}
+funcao max(a,b){se(a>b){retornar a;}retornar b;}
+funcao pow_int(x,n){se(n%1!=0||n<0||n>1024){fail("Exponent budget");}var r=1;var i=0;enquanto(i<n){r=r*x;i=i+1;}retornar r;}
+funcao floor_q(x){retornar qfloor(x);}
+funcao ceil_q(x){retornar -qfloor(-x);}
+funcao precision(bits){se(bits%1!=0||bits<8||bits>128){fail("Precision must be 8..128 bits");}retornar pow_int(2,bits);}
+funcao box(lo,hi){se(lo>hi){fail("Invalid enclosure");}retornar [lo,hi];}
+funcao rounded(lo,hi,scale){retornar box(qfloor(lo*scale)/scale,ceil_q(hi*scale)/scale);}
+funcao times(a,b){var p=[a[0]*b[0],a[0]*b[1],a[1]*b[0],a[1]*b[1]];var lo=p[0];var hi=lo;var i=1;enquanto(i<4){lo=min(lo,p[i]);hi=max(hi,p[i]);i=i+1;}retornar box(lo,hi);}
+funcao sqrt_interval(x,bits){
+ var scale=precision(bits);se(x<0||x>pow_int(2,256)){fail("Square root domain");}se(x==0){retornar [0,0];}
+ var hi=max(1,x);var i=0;var lo=0;
+ enquanto(i<1024){var next=ceil_q((hi+x/hi)*scale/2)/scale;se(next>=hi){parar;}hi=next;i=i+1;}
+ lo=qfloor((x/hi)*scale)/scale;retornar box(lo,hi);
+}
+funcao exp_interval(x,bits){
+ var scale=precision(bits);se(abs(x)>32){fail("Exponential domain is [-32,32]");}se(x==0){retornar [1,1];}
+ var u=abs(x);var shifts=0;enquanto(u>1){u=u/2;shifts=shifts+1;}
+ scale=pow_int(2,bits+2*ceil_q(abs(x))+24);var n=bits+2*ceil_q(abs(x))+32;var sum=0;var term=1;var fact=1;var i=0;
+ enquanto(i<n){sum=sum+term;i=i+1;term=term*u/i;fact=fact*i;}
+ var error=(n+1)/(fact*n);var interval=rounded(sum-error,sum+error,scale);
+ i=0;enquanto(i<shifts){interval=rounded(interval[0]*interval[0],interval[1]*interval[1],scale);i=i+1;}
+ se(x<0){se(interval[0]<=0){fail("Unproved positive exponential");}interval=rounded(1/interval[1],1/interval[0],scale);}
+ retornar interval;
+}
+funcao log_unit(x,n){
+ var z=(x-1)/(x+1);var term=z;var sum=0;var i=1;
+ enquanto(i<=n){se(i%2==1){sum=sum+2*term/i;}term=term*z;i=i+1;}
+ var error=2*abs(term)/(1-abs(z));retornar box(sum-error,sum+error);
+}
+funcao log_interval(x,bits){
+ var scale=precision(bits);var bound=pow_int(2,32);se(x<=0||x<1/bound||x>bound){fail("Log domain is [2^-32,2^32]");}se(x==1){retornar [0,0];}
+ var m=x;var k=0;enquanto(m>2){m=m/2;k=k+1;}enquanto(m<1){m=m*2;k=k-1;}
+ var a=log_unit(m,bits+16);var b=log_unit(2,bits+16);var lo=a[0];var hi=a[1];
+ se(k>=0){lo=lo+k*b[0];hi=hi+k*b[1];}senao{lo=lo+k*b[1];hi=hi+k*b[0];}
+ retornar rounded(lo,hi,scale);
+}
+funcao trig_interval(x,bits){
+ precision(bits);se(abs(x)>32){fail("Trigonometric domain is [-32,32]");}
+ var shifts=bits+14;var divisor=pow_int(2,shifts);var u=x/divisor;
+ var scale=pow_int(2,bits+2*shifts+32);var error=pow_int(abs(u),4)*5/96;
+ var s=rounded(u-u*u*u/6-error,u-u*u*u/6+error,scale);
+ var c=rounded(1-u*u/2-error,1-u*u/2+error,scale);var i=0;
+ enquanto(i<shifts){
+  var product=times(s,c);var ss=times(s,s);var cc=times(c,c);
+  s=rounded(max(-1,2*product[0]),min(1,2*product[1]),scale);
+  c=rounded(max(-1,cc[0]-ss[1]),min(1,cc[1]-ss[0]),scale);i=i+1;
+ }
+ var output=obj();put(output,"sin",s);put(output,"cos",c);put(output,"small_angle",u);put(output,"doublings",shifts);retornar output;
+}
+funcao sin_interval(x,bits){var result=trig_interval(x,bits);retornar result["sin"];}
+funcao cos_interval(x,bits){var result=trig_interval(x,bits);retornar result["cos"];}

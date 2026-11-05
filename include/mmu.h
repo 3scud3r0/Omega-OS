@@ -16,6 +16,7 @@ uint64_t pmm_alloc_frame(void);
 bool pmm_free_frame(uint64_t p);
 bool mmu_map(uint64_t *root,uint64_t va,uint64_t pa,uint64_t flags);
 bool mmu_map_device(uint64_t pa,uint64_t length);
+uint64_t sls_epoch(void);
 void sls_begin(void);
 bool sls_commit(void);
 void sls_test_crash_after(unsigned boundary);
