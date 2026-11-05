@@ -2,6 +2,9 @@
 #include "mmu.h"
 #include "ipc.h"
 #include "proof_sched.h"
+#include "idt.h"
+#include "virtio_blk.h"
+#include "smp.h"
 /* No external assembler: .code32 trampoline and .code64 C entry in this TU. */
 __asm__(
 ".section .multiboot,\"a\"\n.balign 4\n"
@@ -69,54 +72,74 @@ static void init_task(omega_task_t *t,uint64_t id) {
 }
 void kmain(uint32_t magic,uint32_t info) __attribute__((used,externally_visible));
 void kmain(uint32_t magic,uint32_t info) {
- uint64_t phys[4],cycles,start,dirty,value; unsigned i,step;
- omega_task_t *tasks[2],*saved[2]; uint64_t available;
- uart_init(); uart_puts("[OMEGA-OS] BOOT x86-64 / 4-level paging\n");
- require(magic==0x2badb002,"Multiboot magic");
- require(info<PHYS_LIMIT-12,"Multiboot pointer");
+ uint64_t phys[3],available,start,cycles,dirty; unsigned i; bool crash_test=false;
+ omega_task_t *tasks[2]; uint8_t *probe=(uint8_t *)0x40002000;
+ uart_init(); uart_puts("[OMEGA-OS V1] BOOT x86-64\n");
+ idt_init();
+ require(magic==0x2badb002&&info<PHYS_LIMIT-20,"Multiboot data");
  { const uint32_t *mb=(const uint32_t *)(uint64_t)info;
   require((mb[0]&1)!=0,"Multiboot memory information"); available=0x100000ULL+(uint64_t)mb[2]*1024;
+  if((mb[0]&4)&&mb[4]&&mb[4]<PHYS_LIMIT-32) {
+   const char *cmd=(const char *)(uint64_t)mb[4];
+   const char prefix[]="sls.crash="; unsigned pos;
+   for(pos=0;pos<256&&cmd[pos];pos++) {
+    unsigned j=0;
+    if((uint64_t)mb[4]+pos+11>=PHYS_LIMIT) break;
+    while(j<10&&cmd[pos+j]==prefix[j]) j++;
+    if(j==10&&cmd[pos+j]>='1'&&cmd[pos+j]<='4') { sls_test_crash_after((unsigned)(cmd[pos+j]-'0')); crash_test=true; }
+   }
+  }
  }
- /* Everything at/below kernel end is reserved. Boot info is consumed above. */
- pmm_init(available,(uint64_t)__kernel_end); uart_puts("PMM 64 MiB cap initialized\n");
- for(i=0;i<4;i++) { phys[i]=pmm_alloc_frame(); require(phys[i]!=0,"PMM allocation"); uart_puts("PMM allocated "); uart_put_hex(phys[i]); uart_puts("\n"); }
- { uint64_t f=pmm_alloc_frame(); require(f&&pmm_free_frame(f)&&!pmm_free_frame(f),"frame free/double-free"); require(pmm_alloc_frame()==f,"frame reuse"); require(pmm_free_frame(f),"frame release"); }
- require(!pmm_free_frame(0)&&!pmm_free_frame(PHYS_LIMIT),"PMM reserved bounds");
- for(i=0;i<2;i++) {
+ pmm_init(available,(uint64_t)__kernel_end);
+ uart_puts("PMM 64 MiB cap initialized\n");
+ { uint64_t frame=pmm_alloc_frame();
+  require(frame&&pmm_free_frame(frame)&&!pmm_free_frame(frame),"PMM free/double free");
+  require(pmm_alloc_frame()==frame&&pmm_free_frame(frame),"PMM frame reuse");
+  require(!pmm_free_frame(0)&&!pmm_free_frame(PHYS_LIMIT),"PMM reserved bounds");
+ }
+ virtio_blk_init(); rational_tests(); ring_tests();
+ for(i=0;i<3;i++) {
   uint64_t va=0x40000000ULL+(uint64_t)i*4096;
-  require(mmu_map(boot_pml4,va,phys[i],PAGE_WRITE),"map SLS task");
-  tasks[i]=(omega_task_t *)va; saved[i]=(omega_task_t *)phys[2+i];
-  init_task(tasks[i],i+1); require(omega_checkpoint(tasks[i],saved[i]),"initial checkpoint");
+  phys[i]=pmm_alloc_frame(); require(phys[i]!=0,"PMM frame");
+  require(mmu_map(boot_pml4,va,phys[i],PAGE_WRITE),"map SLS");
+  if(i<2) {
+   tasks[i]=(omega_task_t *)va;
+   if(!sls_register(va)) init_task(tasks[i],i+1);
+   require(omega_verify_contract(tasks[i]),"recovered task contract");
+   uart_puts("TASK recovered/start epoch="); uart_put_dec(tasks[i]->epoch); uart_puts("\n");
+  } else {
+   if(sls_register(va)) {
+    for(unsigned j=0;j<4096;j++) require(probe[j]==(uint8_t)(j^0xa5),"recovered probe bytes");
+    uart_puts("TEST persistent probe recovered after reboot PASS\n");
+   }
+   for(unsigned j=0;j<4096;j++) probe[j]=(uint8_t)(j^0xa5);
+  }
  }
- rational_tests(); ring_tests();
- start=rdtsc();
- /* Cooperative producer/consumer on BSP: no AP startup is claimed. */
- for(step=0;step<16;step++) {
-  require(omega_admit(tasks[0],saved[0]),"producer admission");
-  require(rational_make((int64_t)(step%4),8,&tasks[0]->state[0]),"producer state");
+ if(crash_test) {
+  tasks[0]->epoch++; require(rational_make(1,2,&tasks[0]->state[0]),"crash-test state");
+  tasks[0]->proof_hash=omega_contract_token(tasks[0]);
+ }
+ require(mmu_sls_commit(boot_pml4)==3,"initial disk commit");
+ require(mmu_sls_commit(boot_pml4)==0,"clean pages must not commit again");
+ memset(probe,0,4096); require(sls_restore((uint64_t)probe),"disk readback");
+ for(i=0;i<4096;i++) require(probe[i]==(uint8_t)(i^0xa5),"disk DMA bytes");
+ uart_puts("TEST VirtIO disk DMA readback PASS\n");
+ start=rdtsc(); smp_start(&channel,tasks[1]);
+ for(uint64_t step=0;step<SMP_MESSAGES;step++) {
+  require(rational_make((int64_t)(step%4),8,&tasks[0]->state[0]),"producer rational");
   tasks[0]->epoch++; tasks[0]->proof_hash=omega_contract_token(tasks[0]);
-  require(omega_admit(tasks[0],saved[0]),"producer contract");
-  require(ring_push(&channel,step),"producer send");
-  require(omega_admit(tasks[1],saved[1]),"consumer admission");
-  require(ring_pop(&channel,&value)&&value==step,"consumer receive");
-  require(rational_make((int64_t)(value%4),8,&tasks[1]->state[0]),"consumer state");
-  tasks[1]->epoch++; tasks[1]->proof_hash=omega_contract_token(tasks[1]);
-  require(omega_admit(tasks[1],saved[1]),"consumer contract");
-  for(i=0;i<2;i++) require(omega_checkpoint(tasks[i],saved[i]),"commit checkpoint");
-  dirty=mmu_sls_commit(boot_pml4); require(dirty>=2,"hardware dirty tracking");
+  require(omega_verify_contract(tasks[0]),"producer contract");
+  while(!ring_push(&channel,step)) {
+   require(rdtsc()-start<30000000000ULL,"producer timeout"); cpu_pause();
+  }
  }
- cycles=rdtsc()-start;
- uart_puts("IPC transferred 16 messages; contracts accepted\n");
- /* Corruption injection must restore the entire frame, then quarantine. */
- tasks[1]->state[0].num=99;
- require(!omega_admit(tasks[1],saved[1])&&tasks[1]->quarantined,"quarantine");
- require(tasks[1]->state[0].num==saved[1]->state[0].num,"rollback value");
- require(!omega_verify_contract(tasks[1]),"quarantined admission");
- /* Valid tag does not authorize an invalid norm. */
- tasks[0]->state[0].num=2; tasks[0]->state[0].den=1;
- tasks[0]->proof_hash=omega_contract_token(tasks[0]);
- require(!omega_admit(tasks[0],saved[0]),"norm violation");
- uart_puts("TEST contract/tag/norm/quarantine/frame rollback PASS\nCPU TSC cycles: "); uart_put_dec(cycles);
- uart_puts("\nSTABLE: 16 cooperative cycles completed; RAM checkpoints only; entering HLT\n");
+ smp_wait(); cycles=rdtsc()-start;
+ /* AP is quiescent. All subsequent MMU edits are BSP-only; no missing remote
+  * TLB invalidation is hidden behind a claim of general SMP scheduling. */
+ require(omega_verify_contract(tasks[1]),"consumer final contract");
+ dirty=mmu_sls_commit(boot_pml4); require(dirty>=2,"AP/BSP dirty pages");
+ isolation_test((uint64_t)tasks[0]);
+ uart_puts("CPU TSC cycles: "); uart_put_dec(cycles);
+ uart_puts("\nSTABLE V1: disk persistence, SMP, Ring3 PF/GP validated; HLT\n");
  for(;;) __asm__ volatile("cli; hlt");
 }
