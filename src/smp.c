@@ -187,3 +187,13 @@ void smp_wait(void) {
  while(!__atomic_load_n(&done,__ATOMIC_ACQUIRE)) { if(rdtsc()-start>30000000000ULL) panic("AP completion timeout"); cpu_pause(); }
  uart_puts("TEST SMP SPSC 65536 ordered messages on distinct APIC IDs PASS\n");
 }
+
+void smp_timer_start(void) {
+ uint32_t elapsed;
+ lapic[0x3e0/4]=3; lapic[0x320/4]=0x10030; lapic[0x380/4]=0xffffffffU;
+ delay_us(10000); elapsed=0xffffffffU-lapic[0x390/4];
+ if(elapsed<10) panic("LAPIC timer calibration");
+ lapic[0x320/4]=0x20030; lapic[0x380/4]=elapsed/10;
+}
+void smp_timer_stop(void) { lapic[0x320/4]=0x10030; lapic[0x380/4]=0; }
+void smp_timer_eoi(void) { lapic[0xb0/4]=0; }

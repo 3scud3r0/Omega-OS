@@ -1,10 +1,13 @@
 """Create a reviewable, deterministic text bundle of all source/build/test files."""
 from pathlib import Path
 paths = [Path('README.md'), Path('Makefile'), Path('link.ld'), Path('.gitignore')]
-paths += sorted(Path('include').glob('*.h'))
-paths += sorted(Path('src').glob('*.c'))
+paths += sorted(Path('include').rglob('*.h'))
+paths += sorted(Path('src').rglob('*.c'))
 paths += sorted(Path('tests').glob('*.py'))
 paths += sorted(Path('tests').glob('*.c'))
+paths += sorted(Path('user').glob('*.c'))
+paths += [Path('src/crypto/LICENCE.md'),Path('src/crypto/UPSTREAM.json')]
+if Path('build/capsule.h').exists(): paths.append(Path('build/capsule.h'))
 parts = ['OMEGA OS — fontes completos da implementação modular\n'
          'Gerado por make bundle. Cada marcador identifica o arquivo original.\n']
 for path in paths:

@@ -1,166 +1,177 @@
-# Omega OS — núcleo de hardware V1
+# Omega-OS V2 — processos preemptivos, raiz transacional e rede
 
-Kernel experimental x86-64 C99 freestanding, modular, sem libc, heap ou
-bibliotecas de driver. Implementa hardware real emulado: Multiboot, MMU,
-exceções, VirtIO-Block PCI legacy, persistência por página e SMP em dois vCPUs.
-Não é uma certificação de prontidão industrial ou de segurança.
+Implementação experimental x86-64, C99 freestanding e sem libc no kernel.
+Os cinco pilares agora têm caminhos executáveis e testes de hardware em QEMU.
+A documentação da fase anterior permanece em [docs/V1.md](docs/V1.md).
 
-## Build e execução
+| Pilar | Implementação | Evidência |
+|---|---|---|
+| Preempção | LAPIC periódico calibrado pelo PIT, quantum ~1 ms, frames completos, seleção round-robin | Agente que nunca cede a CPU executa e é revogado após oito ticks |
+| Processos | PML4/PDPT privados, páginas privadas, código RO, dados/pilha NX, TSS/RSP0 | IPC entre processos Ring 3; #PF ao ler página de outro processo ou executar a pilha |
+| Syscalls | EFER.SCE, STAR, LSTAR e SFMASK; pilha de kernel; SYSCALL/SYSRET normal e IRET para troca de contexto | 256 mensagens ordenadas e getpid; medição real do custo no convidado |
+| Commit multipágina | Árvore radix CoW de três níveis e superblocos de 512 bytes alternados | Dois estados de páginas sempre do mesmo epoch em quatro cortes SIGKILL |
+| Autorização/VM | Ed25519, cápsula assinada e verificador tipado de política aritmética | RFC8032, assinatura incorreta, autoridade errada, mutações e políticas inválidas |
+| Rede | VirtIO-Net legacy, TX DMA da página do processo e RX com empréstimo de buffer | Duas VMs trocam Ethernet, persistem peer-state e PCAP contém o quadro enviado pelo agente |
 
-Pré-requisitos: GCC x86-64, GNU binutils, Make, Python 3 e QEMU x86.
-Em Debian: `apt-get install gcc binutils make python3 qemu-system-x86 qemu-utils`.
+## Compilar e executar
+
+Host: GCC x86-64, GNU binutils, Make, Python 3, OpenSSL 3 e QEMU x86.
+OpenSSL pertence ao **host de build/testes**, nunca ao runtime bare-metal.
+O kernel mantém `-O3 -flto -ffreestanding -nostdlib -fno-builtin -mno-red-zone
+-Wall -Wextra -Werror -pedantic`; agentes C são compilados separadamente.
+O ELF32 Multiboot contém o trampolim de modo protegido e o kernel de 64 bits.
 
 ```sh
 make -j2
-make run
+make run DISK=omega-v2.img
 make test
 make test-host
 make bundle
 ```
 
-`make` cria `disk.img` raw de 32 MiB somente se ainda não existir. Usa `qemu-img`
-quando disponível, ou truncamento esparso Python com leitura inicial em zeros.
-`make clean` preserva `disk.img`. Os testes usam imagens descartáveis em `build/`.
+O formato de disco V2 é incompatível com V1. O boot detecta metadados V1 e
+recusa sobrescrevê-los; não há migração implementada. Use uma imagem **nova**,
+como `DISK=omega-v2.img`. Make cria uma raw de 32 MiB com qemu-img, ou Python se
+qemu-img não existir. `make clean` preserva imagens existentes e remove os
+artefatos de build, inclusive a autoridade efêmera de desenvolvimento.
 
-O alvo `run` usa:
+Nesta máquina, passe `QEMU=/workspace/tools/bin/qemu-system-x86_64` a `make run`
+ou `make test`. Não crie worktrees: reutilize o checkout isolado existente.
+Foram usados GCC 14.2 e QEMU 10.0.13 com duas vCPUs/TCG multithread.
 
-```sh
-qemu-system-x86_64 -kernel omega_os.elf \
-  -drive file=disk.img,if=virtio,format=raw \
-  -smp 2 -m 128M -serial stdio -display none
-```
+## Processos e preempção
 
-Nesta máquina, QEMU foi instalado localmente, sem sudo, de pacotes Debian
-verificados. Use `make run QEMU=/workspace/tools/bin/qemu-system-x86_64` e o mesmo
-override em `make test`. O diretório de ferramentas não pertence ao repositório.
+`user/agent.c` é C de usuário compilado em código nativo, autenticado e carregado
+em cinco espaços de endereçamento. O produtor envia mensagens e entra em loop
+infinito; o consumidor verifica FIFO e sai; os outros processos testam memória
+privada, NX e rejeição de RSP não canônico sem executar SYSRET inseguro. Cada contexto possui CR3, registradores, stack/data e contador de
+quantum próprios. O timer salva o frame, escolhe o próximo processo e troca CR3.
+Os processos desta demonstração têm orçamento de oito ticks. Um loop infinito
+é terminado, não simplesmente marcado como cooperativo.
 
-Validado com GCC 14.2.0, GNU binutils e QEMU 10.0.13/TCG multithread. Pode-se
-selecionar cross-toolchain com `CC=x86_64-elf-gcc OBJCOPY=x86_64-elf-objcopy`;
-este cross-compiler específico não foi instalado ou validado aqui.
+A execução de processos fica no **BSP**. O AP conserva o teste SMP da V1 com
+65.536 mensagens, depois fica quiescente. Não há migração de processos ou
+escalonamento de usuários no AP. Código confiável de kernel executa com IF
+mascarado nos handlers; esta fase não implementa preempção do próprio kernel,
+NMI watchdog ou garantia de progresso perante falha física de dispositivo.
 
-O Makefile mantém `-std=c99 -ffreestanding -nostdlib -O3 -flto -mno-red-zone
--Wall -Wextra -Werror -pedantic`, desabilita builtins e geração de SIMD no kernel.
-O cabeçalho Multiboot fica nos primeiros 8 KiB (offset validado pelo teste).
-`link.ld` coloca código em 0x100000 e alinha BSS, IDT e DMA em páginas.
-O ELF64 intermediário é convertido em contêiner ELF32 pelo objcopy para o
-loader Multiboot do QEMU; o código continua x86-64 após o trampolim de 32 bits.
+A tabela de kernel é compartilhada como supervisor. O ramo de usuário de cada
+processo é privado; mapeamentos antigos dos testes V1 não ficam acessíveis aos
+novos processos. Código usuário não é gravável, e pilha/dados têm NX. Em uma
+falta de usuário o contexto é abandonado; faltas do kernel continuam sendo fatais.
 
-## Memória e persistência
+ABI: número em RAX, argumento escalar em RDI, resultado em RAX; RCX/R11 são
+clobbered. Não se aceita ponteiro arbitrário do usuário. Operações de rede usam
+uma página privada fixa, validada pelo kernel e mantida estável até o DMA acabar.
 
-O PMM mantém o limite de 64 MiB e bitmap hierárquico com bit-scan, reservas do
-kernel, rejeição de double-free e validação do limite de RAM Multiboot.
-A inicialização pressupõe RAM contígua informada por `mem_upper`, como no PC QEMU
-validado; não substitui um parser completo de E820 para máquinas arbitrárias.
-A MMU também permite mapear MMIO/ACPI abaixo de 4 GiB, com PCD/PWT, e páginas U/S
-para o contexto de usuário. DMA usa buffers estáticos identity-mapped em RAM
-coerente x86. Há um request em voo, com três descritores de cabeçalho/dados/status.
+| RAX | Serviço | Resultado |
+|---|---|---|
+| 0 | getpid | ID do processo |
+| 1 | enviar escalar, produtor autorizado | 0 ou UINT64_MAX |
+| 2 | receber escalar, consumidor autorizado | valor ou UINT64_MAX |
+| 3 | sair | contexto encerrado |
+| 4 | enviar frame Ethernet da página 0x80003000; RDI=tamanho | 0 ou UINT64_MAX |
+| 7 | consultar MAC disponível | seis bytes em inteiro little-endian, ou 0 |
 
-PCI usa CF8/CFC, varre barramentos, slots e funções, habilita I/O, bus mastering
-e desabilita INTx. O driver detecta 1af4:1001 e negocia `VIRTIO_BLK_F_FLUSH`.
-Dispositivos somente modernos (1af4:1042) são identificados mas rejeitados com
-mensagem explícita: este driver implementa o transporte **legacy**, não modern
-PCI capabilities. `virtio_blk_submit` publica DMA assincronamente;
-`virtio_blk_poll` consome o used ring. As funções read/write_page esperam a
-conclusão com timeout; FLUSH espera a conclusão e exige suporte do dispositivo.
+A volta rápida usa SYSRET somente com RIP/RSP no intervalo canônico permitido e
+RFLAGS saneados. Trocas de tarefa usam IRET. Não há promessa de syscall em menos
+de 20 ciclos: o teste mede a média de 1.024 chamadas; uma execução sob QEMU
+registrou 336 ticks TSC por chamada, sujeitos a emulação e interrupções.
 
-Duas correções importantes ao layout solicitado:
+## SLS: commit global e limites físicos
 
-- O tamanho da fila legacy é anunciado pelo dispositivo e não é configurável
-  pelo guest. São aceitos tamanhos potência de dois entre 128 e 1024, com arena
-  estática de 32 KiB. O QEMU 10 desta validação anuncia 1024, inclusive quando a
-  propriedade moderna `queue-size=128` é solicitada. Somente o tamanho anunciado
-  é usado; não foi validado um dispositivo que anuncie 128 nesta máquina.
-- O available ring fica **imediatamente depois dos descritores**. O used ring é
-  alinhado em 4096. Alinhar cada uma das três estruturas separadamente em páginas
-  viola o layout legacy para vários tamanhos. A arena contígua começa em 4096.
+O registro persistente é uma árvore radix de três níveis, fanout 256. Cada
+entrada guarda setor e CRC64 do descendente. A capacidade lógica é de 16.777.216
+páginas (64 GiB); até 4.096 páginas podem estar registradas/residentes no kernel
+atual, cujo PMM continua limitado a 64 MiB. O teste verifica um endereço esparso
+no final do primeiro GiB. Isso **não** significa que um GiB inteiro de dados foi
+carregado na RAM ou escrito no teste. Não há demand paging.
 
-`mmu_sls_commit` procura dirty bits de hardware nas páginas registradas no SLS.
-As páginas transitórias do kernel não são publicadas no disco. Para cada página
-registrada, mantém dois slots alternados:
+Uma transação inicia da raiz confirmada, escreve novos dados e caminhos CoW em
+blocos append-only e publica uma única raiz para **todas** as páginas alteradas.
+Após FLUSH dos dados/árvore, escreve um setor mestre de 512 bytes no superbloco
+alternativo e executa outro FLUSH. Só então os dirty bits são limpos. Páginas
+não alteradas permanecem referenciadas pela nova raiz.
 
-1. Escreve os 4096 bytes do novo estado no slot inativo; aguarda DMA e FLUSH.
-2. Escreve uma página de metadados com magic, geração, endereço virtual, CRC64
-   dos dados e CRC64 dos metadados; aguarda DMA e outro FLUSH.
-3. Só então avança a geração em RAM, limpa PAGE_DIRTY e executa `invlpg`.
+No boot, validam-se superbloco, árvore inteira e dados, escolhendo o maior epoch
+completo. Uma raiz inválida pode levar à raiz anterior; dados compartilhados
+entre ambas continuam sendo um ponto comum de falha de mídia. Sem raiz válida,
+o kernel falha fechado. Não há formatação automática nem reparo silencioso.
 
-No boot/rollback, lê e valida os dois slots, usando a maior geração válida.
-Se há metadados não vazios mas nenhum checkpoint válido, falha explicitamente
-em vez de reinicializar o estado silenciosamente. Slots da página de índice i
-começam nos setores `8 + 32*i` e `24 + 32*i`; cada um tem 8 setores de metadados
-seguidos de 8 setores de dados. Registro e ordem dos endereços são fixos.
+O protocolo assume dispositivo/host obedecendo FLUSH e usa redundância e CRCs
+para detectar escritas rasgadas. Os testes não são uma prova de resistência a
+qualquer queda elétrica de qualquer hardware. CRC64 não autentica um disco
+adversarial. Não há coleta de lixo: o log cresce até a capacidade da imagem e
+falha fechado quando se esgota. Não há superbloco de 512 bytes que seja
+fisicamente atômico em todos os dispositivos existentes.
 
-Isso implementa publicação copy-on-write **por página**; não há um ponteiro raiz
-atômico global, transação atômica entre páginas, WAL completo, coletor de lixo,
-filesystem, FUA, NVMe ou Ed25519. CRC detecta corrupção acidental, não ataques.
-A durabilidade depende de o backend/hardware cumprir FLUSH. Os testes não provam
-comportamento sob todos os cortes elétricos, firmwares, corrupção adversarial
-ou falhas simultâneas dos dois slots.
+## Autoridade externa, Ed25519 e verificação de política
 
-## Exceções e fronteira de privilégio
+Monocypher **4.0.2** foi incorporado ao fonte, com licença BSD-2-Clause/CC0,
+manifesto de origem e hashes originais em `src/crypto/UPSTREAM.json`. A única
+adaptação ao upstream troca headers de tipos da biblioteca padrão por typedefs
+freestanding. Não há linkagem com biblioteca criptográfica do host.
 
-A IDT tem 256 gates de 16 bytes e alinhamento de 4096. Os 32 stubs de exceção
-normalizam error codes, salvam todos os GPRs e alinham a pilha antes do handler C.
-GDT, TSS, RSP0 e pilha IST de emergência são individuais para BSP/AP.
+No build de desenvolvimento, `tests/make_capsule.py` cria uma chave privada
+**somente em build/dev-authority.pem**, com modo 0600; ela não entra no kernel,
+Git ou TXT. O kernel recebe apenas chave pública, assinatura, código e política.
+Recriar o diretório build cria uma nova identidade de desenvolvimento. Isso não
+é uma raiz de confiança de produção provisionada.
 
-O contexto de teste entra de fato em CPL3 com `iretq`, CS=0x23, SS=0x1b e IOPL=0.
-Somente código e pilha desse contexto têm folhas PAGE_USER. Testes executam:
+Para uma autoridade própria, gere a cápsula no host confiável usando
+`python3 tests/make_capsule.py --authority-key /caminho/privado.pem` após gerar
+`build/agent.bin`. Exporte apenas `build/capsule.h`, mantenha a chave fora do
+checkout de distribuição e compile com `AUTHORITY_BUNDLE=/caminho/capsule.h`.
+Esse modo não gera chave privada. O header é entrada confiável do build e fixa
+a chave pública autorizada; secure boot e rotação de autoridade não estão
+implementados. Não envie chaves privadas por chat.
 
-- Leitura de página supervisor: #PF presente, CR2=0x100000.
-- `out dx,al` na COM1: #GP por privilégio de I/O.
-- Leitura de CR3: #GP por instrução privilegiada.
-- Leitura de página não mapeada: #PF não presente, CR2=0x60000000.
+A assinatura cobre domínio/versionamento, tamanhos, código nativo e política.
+O verificador autentica a autoridade e rejeita mutações antes do carregamento.
+A mini-VM interpreta um formato total, sem saltos, memória ou chamadas, com
+pilha máxima de 16 valores e 256 bytes. PUSH/ADD usam inteiros, EQ produz booleano,
+ASSERT exige booleano verdadeiro, HALT exige pilha vazia e nenhuma instrução
+restante. Overflow, underflow e mistura de tipos são rejeitados.
 
-Para #PF/#GP de um contexto de usuário associado a uma tarefa, o handler restaura
-o frame do disco, revalida o contrato, põe a tarefa em quarentena e abandona o
-contexto violador, devolvendo o controle à pilha salva do kernel. Os testes
-corrompem o estado em RAM antes das faltas e verificam a restauração. Exceções
-inesperadas no kernel continuam fatais e imprimem vetor, error code, RIP e CR2.
+Essa VM verifica **a política aritmética fornecida**; não prova segurança do
+código nativo, não aceita provas Lean e não é um compilador Ômega. O vínculo
+entre código e política é a assinatura da autoridade. A tag SipHash antiga
+permanece apenas nos testes de estado da V1, sem função de autenticação.
 
-**Os workers produtor/consumidor SMP ainda rodam em Ring 0.** O contexto Ring 3
-é o teste da fronteira de hardware e da recuperação, não um runtime completo
-de agentes isolados. Não há syscalls, espaços de endereços por processo,
-preempção, escalonamento de contextos de usuário, capacidades ou isolamento DMA.
-A tag SipHash com chave pública de demonstração continua sendo integridade de
-estado; não é autenticação adversarial ou prova Lean.
+## Rede entre dois nós
 
-## SMP
+VirtIO-Net PCI legacy (1af4:1000) usa filas RX/TX independentes, sem negociar
+offloads. O transporte moderno 1041 é detectado e rejeitado explicitamente.
+TX usa cadeia de descritores para header e payload; no syscall o payload vem
+da página física do agente, sem bounce copy. RX entrega empréstimo do buffer
+DMA ao kernel e exige release antes da reposição. Copiar o payload recebido
+para estado persistente é uma operação intencional, distinta do caminho RX.
 
-Descobre RSDP por EBDA/BIOS, valida checksums, percorre XSDT ou RSDT e MADT,
-incluindo entradas LAPIC e override de endereço. Seleciona um AP habilitado com
-ID xAPIC de 8 bits. Mapeia LAPIC sem cache, checa MSR, envia INIT assert/deassert
-e dois SIPIs. Delays usam PIT canal 2, sem presumir uma frequência de TSC.
+A suíte liga duas VMs por socket Ethernet do QEMU em localhost. Dentro dos
+convidados, driver, protocolo e armazenamento são todos bare-metal. Frames
+EtherType 0x88b5 implementam anúncio/ACK e confirmam peer-state no SLS. O host
+verifica os dois discos e a captura PCAP de TX originado em Ring 3.
 
-O trampolim copiado para 0x8000 começa em modo real de 16 bits, entra em modo
-protegido, carrega CR3 compartilhado, habilita long mode e usa uma pilha própria
-estática. O AP carrega sua GDT/TSS/IDT e sinaliza online via release/acquire.
+Esse protocolo é de demonstração: não implementa IP/UDP/TCP, autenticação dos
+frames, proteção de replay, consenso, resolução de conflitos ou replicação
+transacional de aplicações. Ed25519 de admissão não autentica a rede.
+Sem NIC, o teste de rede é explicitamente omitido; `make test` instala a NIC
+nos dois nós e exige a troca de frames e persistência para passar.
 
-BSP produz 65.536 mensagens enquanto o AP consome exclusivamente o SPSC e
-valida seu estado racional. O BSP verifica a conclusão e os IDs APIC distintos.
-Depois, o AP fica em HLT e o BSP realiza commits/isolamento. Não há mudança
-concorrente de page tables, shootdown TLB remoto ou scheduler SMP geral.
-A implementação usa xAPIC MMIO e rejeita x2APIC ativo; não implementa RISC-V.
-No QEMU, IDs distintos são vCPUs, não evidência de teste em duas CPUs físicas.
+## Testes e fontes completos
 
-## Testes e evidência
+`make test` usa exclusivamente imagens em build/, sem tocar na imagem do usuário.
+Confere Multiboot, inicialização SMP, falhas de hardware, timer não cooperativo,
+CR3 privado, NX, syscall/IPC, assinatura/política e rede. Para storage, verifica
+CRCs e árvores raw pelo host, força SIGKILL em quatro fronteiras, exige epochs
+multipágina coerentes e testa fallback da raiz global após corrupção de um
+payload exclusivo do epoch mais recente. Também reinicia o nó com peer-state.
 
-`make test` executa QEMU com `-accel tcg,thread=multi`, verifica Multiboot, UART,
-DMA, bytes diretamente na imagem raw pelo host, epochs de ambas as tarefas,
-AP online e os faults Ring 3. Encerra QEMU com SIGKILL e verifica recuperação
-no reboot. Corrompe o slot mais recente e verifica o fallback para o anterior.
+`make test-host` verifica RFC8032, 69 casos negativos de assinatura, tipos e
+2.000 políticas aritméticas, mais os 40.000 casos racionais e 1.000.000 mensagens
+SPSC herdados. Os testes V1 originais são recuperáveis pelo Git na versão V1;
+o formato antigo foi substituído, sem fingir compatibilidade de disco.
 
-A suíte também usa `-append sls.crash=N` para parar em quatro fronteiras reais:
-após DMA de dados, após FLUSH de dados, após DMA de metadados e após FLUSH de
-metadados. O hook, inativo por padrão, apenas pausa o guest em HLT; não simula
-sucesso de I/O. O host aplica SIGKILL, verifica os slots no arquivo e reinicia.
-São cortes nas fronteiras do protocolo, não uma enumeração de todos os instantes
-possíveis durante DMA ou da persistência interna de hardware físico.
-
-Logs e imagens de teste ficam em `build/v1-*.log` e `build/v1-*.img`.
-`make test-host` verifica 40.000 operações racionais contra frações exatas Python
-e 1.000.000 mensagens em duas threads pthread do host. A libc desses testes
-não é vinculada ao kernel (`nm -u build/omega64.elf` deve produzir saída vazia).
-
-O kernel termina em HLT depois de validar os subsistemas. Ciclos TSC são
-telemetria, não nanossegundos calibrados, previsão térmica ou garantia de latência.
-`omega_os_fontes.txt` reúne fontes, headers, linker, Makefile, testes e este README;
-regenere com `make bundle` após mudanças.
+`nm -u build/omega64.elf` não deve listar dependências externas. `make bundle`
+reúne todos os fontes, inclusive agentes, criptografia, licença e o header
+**público** da cápsula, em `omega_os_fontes.txt`.

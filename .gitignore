@@ -1,3 +1,5 @@
 build/
 omega_os.elf
 disk.img
+
+*.img

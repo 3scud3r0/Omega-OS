@@ -5,6 +5,8 @@
 #include "idt.h"
 #include "virtio_blk.h"
 #include "smp.h"
+#include "runtime.h"
+#include "net.h"
 /* No external assembler: .code32 trampoline and .code64 C entry in this TU. */
 __asm__(
 ".section .multiboot,\"a\"\n.balign 4\n"
@@ -116,8 +118,8 @@ void kmain(uint32_t magic,uint32_t info) {
   }
  }
  if(crash_test) {
-  tasks[0]->epoch++; require(rational_make(1,2,&tasks[0]->state[0]),"crash-test state");
-  tasks[0]->proof_hash=omega_contract_token(tasks[0]);
+  for(i=0;i<2;i++) { tasks[i]->epoch++; require(rational_make(1,2,&tasks[i]->state[0]),"crash-test state");
+   tasks[i]->proof_hash=omega_contract_token(tasks[i]); }
  }
  require(mmu_sls_commit(boot_pml4)==3,"initial disk commit");
  require(mmu_sls_commit(boot_pml4)==0,"clean pages must not commit again");
@@ -138,8 +140,18 @@ void kmain(uint32_t magic,uint32_t info) {
   * TLB invalidation is hidden behind a claim of general SMP scheduling. */
  require(omega_verify_contract(tasks[1]),"consumer final contract");
  dirty=mmu_sls_commit(boot_pml4); require(dirty>=2,"AP/BSP dirty pages");
+ /* Exercise a sparse logical address at the end of the first GiB. */
+ { uint64_t frame=pmm_alloc_frame(); uint64_t va=0x7ffff000;
+  require(frame&&mmu_map(boot_pml4,va,frame,PAGE_WRITE),"GiB sparse mapping");
+  (void)sls_register(va); memcpy((void *)va,"OMEGA-GIB-SPARSE",16);
+  require(mmu_sls_commit(boot_pml4)!=0,"GiB tree commit");
+ }
  isolation_test((uint64_t)tasks[0]);
+ require(sls_restore((uint64_t)tasks[0])&&omega_verify_contract(tasks[0]),"post-isolation restore");
+ (void)net_init();
+ runtime_run();
+ net_test();
  uart_puts("CPU TSC cycles: "); uart_put_dec(cycles);
- uart_puts("\nSTABLE V1: disk persistence, SMP, Ring3 PF/GP validated; HLT\n");
+ uart_puts("\nSTABLE V2: runtime/storage/admission complete; HLT\n");
  for(;;) __asm__ volatile("cli; hlt");
 }
