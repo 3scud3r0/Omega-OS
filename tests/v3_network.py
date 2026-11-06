@@ -54,7 +54,8 @@ class Router:
                         conn,_=key.fileobj.accept();conn.setblocking(False);self.connections[i]=conn;self.input[i]=bytearray();self.output[i]=bytearray();self.selector.register(conn,selectors.EVENT_READ,('connection',i));continue
                     conn=key.fileobj
                     if events&selectors.EVENT_READ:
-                        data=conn.recv(65536)
+                        try:data=conn.recv(65536)
+                        except ConnectionResetError:data=b''
                         if not data:self.selector.unregister(conn);conn.close();self.connections.pop(i,None);continue
                         self.input[i]+=data
                         while len(self.input[i])>=4:
@@ -64,7 +65,10 @@ class Router:
                             p=bytes(self.input[i][4:4+n]);del self.input[i][:4+n]
                             if n:self.route(i,p)
                     if events&selectors.EVENT_WRITE and self.output[i]:
-                        sent=conn.send(self.output[i]);del self.output[i][:sent]
+                        try:sent=conn.send(self.output[i])
+                        except (BrokenPipeError,ConnectionResetError):
+                            self.selector.unregister(conn);conn.close();self.connections.pop(i,None);continue
+                        del self.output[i][:sent]
                         if not self.output[i]:self.selector.modify(conn,selectors.EVENT_READ,('connection',i))
         except (OSError,AssertionError) as exc:
             if not self.stop:self.error=exc

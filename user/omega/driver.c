@@ -1,7 +1,9 @@
 #include "omega_value.h"
 #include "bytecode.h"
+#include "incubator.h"
 static uint8_t arena[8*1024*1024] ALIGN_4K;
 static size_t used;
+uint64_t ov_gas;
 const char *ov_input;
 V ov_output;
 static uint64_t syscall(uint64_t n,uint64_t a){uint64_t r;__asm__ volatile("syscall":"=a"(r):"a"(n),"D"(a):"rcx","r11","memory");return r;}
@@ -53,15 +55,31 @@ static void tensor_mcts(int64_t *best_a,int64_t *best_b,unsigned *visited){
  }
  omega_fail("MCTS finite budget exhausted");
 }
+unsigned omega_guided_form(unsigned cycle){
+ /* All V objects from the preceding frontend/egraph call are ephemeral.
+  * The durable pool contains copied scalar descriptors, never arena pointers. */
+ used=0;ov_gas=0;int64_t a,b;unsigned iterations;tensor_mcts(&a,&b,&iterations);
+ if(a!=2||b!=1||!iterations)omega_fail("Mutation PUCT contract");
+ unsigned form=cycle<16?4:1+(cycle+(unsigned)(a+b))%4;
+ V x=pair("const",o_int(7),0),y=pair("const",o_int(5),0),two=pair("const",o_int(2),0),expression;
+ if(form==2)expression=pair("mul",pair("add",y,x),two);
+ else if(form==3)expression=pair("add",pair("mul",x,two),pair("mul",y,two));
+ else expression=pair("mul",pair("add",x,y),two);
+ V request=o_obj();o_put(request,o_str("variables"),o_int(1));o_put(request,o_str("rounds"),o_int(4));o_put(request,o_str("max_nodes"),o_int(64));o_put(request,o_str("expression"),expression);
+ V result=omega_egraph(request),value=o_get(result,o_str("value"));
+ if(!o_truth(o_get(result,o_str("polynomial_equivalence_checked")))||value->n!=2||ov_cmp(value->a[0]->s,"const")||o_long(value->a[1])!=24)omega_fail("Typed mutation equivalence");
+ return form;
+}
 void _start(void){
  volatile uint64_t *data=(volatile uint64_t *)0x80002000;uint8_t *capsule=(uint8_t *)0x80003000;
- if(data[0]==6){omega_rational_t result;if(!bytecode_run(capsule,(size_t)data[4],&result))omega_fail("Child bytecode execution");memcpy((void *)(data+6),&result,16);(void)syscall(37,0);omega_fail("Child returned");}
  while(!syscall(10,0))__asm__ volatile("pause");
  char source[512];size_t s=0;while(capsule[s]&&s<511){source[s]=(char)capsule[s];s++;}source[s]=0;
  V ir=omega_frontend(source),nodes=o_get(ir,o_str("nos")),symbols=o_get(ir,o_str("simbolos"));
  size_t n=16;uint64_t magic=BYTECODE_MAGIC;memcpy(capsule,&magic,8);emit(nodes,o_long(o_get(symbols,o_str("result"))),capsule,&n,0);capsule[n++]=0;
  {uint64_t bytes=n-16;memcpy(capsule+8,&bytes,8);}
  omega_rational_t expected;if(!bytecode_run(capsule,n,&expected))omega_fail("Compiled bytecode invalid");
+ size_t native_length;if(!jit_compile(capsule,n,(uint8_t *)JIT_VA,&native_length))omega_fail("Native emitter");
+ {uint64_t r;__asm__ volatile("syscall":"=a"(r):"a"(11ULL),"D"(JIT_VA),"S"(native_length):"rcx","r11","memory");if(r)omega_fail("Native W^X admission");}
  if(syscall(8,n)!=7)omega_fail("Delegated child admission");
  V request=o_obj(),expression=pair("mul",pair("add",pair("var",o_int(0),0),pair("const",o_int(0),0)),pair("const",o_int(1),0));
  o_put(request,o_str("variables"),o_int(1));o_put(request,o_str("rounds"),o_int(4));o_put(request,o_str("max_nodes"),o_int(64));o_put(request,o_str("expression"),expression);
@@ -73,5 +91,7 @@ void _start(void){
  data[8]=(uint64_t)o_long(o_get(result,o_str("nodes")));data[9]=(uint64_t)o_long(o_get(result,o_str("cost")));
  data[10]=(uint64_t)a;data[11]=(uint64_t)b;data[12]=iterations;memcpy((void *)(data+6),&expected,16);
  if(syscall(38,0))omega_fail("Cognitive SLS commit");
+ while(!syscall(14,0))__asm__ volatile("pause");
+ do {incubator_run();}while(syscall(23,0)==0);
  (void)syscall(3,0);omega_fail("Compiler returned after exit");
 }

@@ -1,4 +1,5 @@
 #include "mmu.h"
+#include "consensus.h"
 #include "virtio_blk.h"
 #include "uart.h"
 /* Three-level 256-way CoW radix tree. Append-only allocation; an epoch is
@@ -106,7 +107,7 @@ static bool append(const void *data,uint64_t *s,uint64_t *h) {
 }
 bool sls_persist(uint64_t va,const void *data) {
  uint64_t id=(va-BASE)/4096,s,h; unsigned a=(unsigned)(id>>16),b=(unsigned)((id>>8)&255),c=(unsigned)(id&255);
- if(!transaction||!sls_contains(va)) return false;
+ if(!transaction||!sls_contains(va)||!consensus_gate(va,data)) return false;
  memset(directory,0,4096); memset(leaf,0,4096);
  if(working[2*a]&&!read_checked(working[2*a],working[2*a+1],directory,cursor)) return false;
  if(directory[2*b]&&!read_checked(directory[2*b],directory[2*b+1],leaf,cursor)) return false;

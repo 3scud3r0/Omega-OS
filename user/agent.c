@@ -9,6 +9,7 @@ void _start(void) {
  volatile u64 *data=(volatile u64 *)0x80002000ULL;
  u64 role=data[0],i;
  if(call(0,0)!=role+1) (void)call(3,1);
+ if(data[22]){if(data[24])*(volatile unsigned char *)0x83000000ULL=0xf4;u64 ok=((u64 (*)(void *))0x83000000ULL)((void *)(data+6));if(!ok)(void)call(3,1);(void)call(data[23],0);}
  if(role==0) {
   { u64 mac=call(7,0);
    if(mac) { volatile unsigned char *packet=(volatile unsigned char *)0x80003000ULL;

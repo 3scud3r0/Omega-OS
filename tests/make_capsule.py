@@ -22,7 +22,7 @@ def c_array(name,data): return 'static const unsigned char '+name+'[] = {'+','.j
 (b/'capsule.h').write_text(c_array('authority_public',pub)+c_array('capsule_signature',(b/'capsule.sig').read_bytes())+c_array('capsule_message',message))
 
 compiler=(b/'compiler.elf').read_bytes()
-assert len(compiler)<=256*1024
+assert len(compiler)<=1024*1024
 message=b'OMEGA-COMPILER3\0'+struct.pack('<II',len(compiler),len(vm))+compiler+vm
 (b/'compiler.msg').write_bytes(message)
 run(['openssl','pkeyutl','-sign','-rawin','-inkey',str(key),'-in','build/compiler.msg','-out','build/compiler.sig'])

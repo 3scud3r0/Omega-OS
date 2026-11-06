@@ -40,7 +40,7 @@ __asm__(
 "movl %eax,%cr3\n"
 "movl $0xc0000080,%ecx\n"
 "rdmsr\n"
-"orl $0x100,%eax\n"
+"orl $0x900,%eax\n"
 "wrmsr\n"
 "movl %cr0,%eax\n"
 "orl $0x80010000,%eax\n"

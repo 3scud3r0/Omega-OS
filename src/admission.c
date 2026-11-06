@@ -24,7 +24,7 @@ const uint8_t *admission_compiler(size_t *length) {
  if(sizeof compiler_message<24) panic("compiler capsule size");
  for(unsigned i=0;i<16;i++) if(compiler_message[i]!=domain[i]) panic("compiler capsule domain");
  memcpy(&n,compiler_message+16,4);memcpy(&v,compiler_message+20,4);
- if(n>256*1024||24ULL+n+v!=sizeof compiler_message||!vm_verify(compiler_message+24+n,v)||
+ if(n>1024*1024||24ULL+n+v!=sizeof compiler_message||!vm_verify(compiler_message+24+n,v)||
     crypto_ed25519_check(compiler_signature,authority_public,compiler_message,sizeof compiler_message)) panic("compiler authority admission");
  *length=n;return compiler_message+24;
 }
