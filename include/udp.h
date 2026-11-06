@@ -7,5 +7,7 @@ void net_boot_config(uint32_t info);
 uint8_t *udp_tx_payload(void);
 bool udp_send(const uint8_t *body,size_t n);
 bool udp_receive(const uint8_t **body,size_t *n);
+void udp_select(uint32_t ip,uint16_t port);
+bool udp_receive_from(const uint8_t **body,size_t *n,uint32_t *source,uint16_t *port);
 void udp_release(void);
 #endif

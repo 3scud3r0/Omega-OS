@@ -1,0 +1,47 @@
+#include "jit.h"
+typedef struct { uint8_t *p;size_t n;size_t fail[256],calls[256];unsigned nf,nc;bool ok; } emitter_t;
+static void bytes(emitter_t *e,const uint8_t *p,size_t n){if(n>4096-e->n){e->ok=false;return;}memcpy(e->p+e->n,p,n);e->n+=n;}
+#define EMIT(e,...) do {const uint8_t b[]={__VA_ARGS__};bytes((e),b,sizeof b);} while(0)
+static void imm64(emitter_t *e,int64_t v){bytes(e,(const uint8_t *)&v,8);}
+static void rel(emitter_t *e,size_t at,size_t target){int64_t d=(int64_t)target-(int64_t)(at+4);uint32_t v=(uint32_t)d;memcpy(e->p+at,&v,4);}
+static void fail_if(emitter_t *e,uint8_t condition){EMIT(e,0x0f,condition,0,0,0,0);if(e->nf<256)e->fail[e->nf++]=e->n-4;else e->ok=false;}
+static void normalize(emitter_t *e){EMIT(e,0xe8,0,0,0,0);if(e->nc<256)e->calls[e->nc++]=e->n-4;else e->ok=false;}
+bool jit_compile(const void *certificate,size_t n,uint8_t code[4096],size_t *length){
+ omega_rational_t expected;const uint8_t *p=certificate;size_t pc=16;emitter_t e;
+ if(!bytecode_run(certificate,n,&expected))return false;
+ memset(&e,0,sizeof e);e.p=code;e.ok=true;memset(code,0xcc,4096);
+ /* SysV ABI: bool fn(rational *out); only bounded internal calls. */
+ EMIT(&e,0x55,0x48,0x89,0xe5,0x41,0x54,0x41,0xbc,0,8,0,0);
+ while(pc<n){uint8_t op=p[pc++];
+  if(!op)break;
+  EMIT(&e,0x49,0xff,0xcc);fail_if(&e,0x84);
+  if(op==1){omega_rational_t q;memcpy(&q,p+pc,16);pc+=16;EMIT(&e,0x48,0xb8);imm64(&e,q.num);EMIT(&e,0x48,0xba);imm64(&e,q.den);EMIT(&e,0x52,0x50);continue;}
+  if(op==6){EMIT(&e,0x58,0x5a,0x48,0xf7,0xd8);fail_if(&e,0x80);EMIT(&e,0x52,0x50);continue;}
+  EMIT(&e,0x41,0x58,0x41,0x59,0x58,0x59); /* b=num r8/den r9, a=rax/rcx */
+  if(op==2||op==3){EMIT(&e,0x49,0x0f,0xaf,0xc1);fail_if(&e,0x80);EMIT(&e,0x4c,0x0f,0xaf,0xc1);fail_if(&e,0x80);
+   if(op==2){EMIT(&e,0x4c,0x01,0xc0);}else{EMIT(&e,0x4c,0x29,0xc0);}fail_if(&e,0x80);EMIT(&e,0x49,0x0f,0xaf,0xc9);fail_if(&e,0x80);
+  }else if(op==4){EMIT(&e,0x49,0x0f,0xaf,0xc0);fail_if(&e,0x80);EMIT(&e,0x49,0x0f,0xaf,0xc9);fail_if(&e,0x80);
+  }else{EMIT(&e,0x4d,0x85,0xc0);fail_if(&e,0x84);EMIT(&e,0x49,0x0f,0xaf,0xc1);fail_if(&e,0x80);EMIT(&e,0x49,0x0f,0xaf,0xc8);fail_if(&e,0x80);
+   EMIT(&e,0x48,0x85,0xc9,0x79,0x12,0x48,0xf7,0xd9);fail_if(&e,0x80);EMIT(&e,0x48,0xf7,0xd8);fail_if(&e,0x80);
+  }
+  normalize(&e);EMIT(&e,0x52,0x50);
+ }
+ EMIT(&e,0x58,0x5a,0x48,0x89,0x07,0x48,0x89,0x57,0x08,0xb8,1,0,0,0,0x4c,0x8b,0x65,0xf8,0xc9,0xc3);
+ size_t failure=e.n;EMIT(&e,0x31,0xc0,0x4c,0x8b,0x65,0xf8,0xc9,0xc3);
+ size_t helper=e.n;
+ /* Unsigned Euclid accepts abs(INT64_MIN). Denominator stays positive.
+  * Each remainder consumes gas. Maximum total work is 2048 decrements. */
+ EMIT(&e,0x49,0x89,0xc2,0x49,0x89,0xcb,0x48,0x85,0xc0,0x79,3,0x48,0xf7,0xd8,0x49,0x89,0xc8);
+ size_t loop=e.n;EMIT(&e,0x49,0xff,0xcc);fail_if(&e,0x84);EMIT(&e,0x31,0xd2,0x49,0xf7,0xf0,0x4c,0x89,0xc0,0x49,0x89,0xd0,0x4d,0x85,0xc0,0x0f,0x85,0,0,0,0);rel(&e,e.n-4,loop);
+ EMIT(&e,0x49,0x89,0xc0,0x4c,0x89,0xd0,0x48,0x99,0x49,0xf7,0xf8,0x49,0x89,0xc2,0x4c,0x89,0xd8,0x31,0xd2,0x49,0xf7,0xf0,0x48,0x89,0xc2,0x4c,0x89,0xd0,0xc3);
+ if(!e.ok)return false;
+ for(unsigned i=0;i<e.nf;i++)rel(&e,e.fail[i],failure);
+ for(unsigned i=0;i<e.nc;i++)rel(&e,e.calls[i],helper);
+ *length=e.n;return true;
+}
+bool jit_audit(const void *certificate,size_t n,const uint8_t *code,size_t length){
+ uint8_t canonical[4096];size_t count;if(length>4096||!jit_compile(certificate,n,canonical,&count)||count!=length)return false;
+ /* Compare the entire page: the non-code tail must be INT3, never an
+  * unaudited second entry point. Constants are data, not opcode substrings. */
+ uint8_t difference=0;for(size_t i=0;i<4096;i++)difference|=canonical[i]^code[i];return difference==0;
+}

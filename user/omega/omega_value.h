@@ -8,7 +8,8 @@ void *ov_alloc(size_t n);
 #define OV static __attribute__((unused))
 OV size_t ov_len(const char *s) { size_t n=0; while(s[n]) n++; return n; }
 OV int ov_cmp(const char *a,const char *b) { while(*a&&*a==*b){a++;b++;} return (unsigned char)*a-(unsigned char)*b; }
-OV void o_tick(void) { static uint64_t gas; if(++gas>2000000) omega_fail("Omega instruction budget"); }
+extern uint64_t ov_gas;
+OV void o_tick(void) { if(++ov_gas>2000000) omega_fail("Omega instruction budget"); }
 OV void o_enter(void) { o_tick(); }
 OV V o_ret(V v) { return v; }
 OV V ov_new(unsigned kind) { V v=ov_alloc(sizeof *v); v->kind=kind; v->q.den=1; return v; }

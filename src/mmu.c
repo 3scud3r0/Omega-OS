@@ -5,6 +5,22 @@ static uint64_t free_bits[256] ALIGN_64;
 static uint64_t summary[4] ALIGN_64;
 static uint64_t top;
 static uint64_t first_frame,last_frame;
+static bool hardened;
+uint64_t *mmu_leaf(uint64_t *root,uint64_t va){
+ uint64_t *t=root;for(unsigned shift=39;shift>12;shift-=9){uint64_t e=t[(va>>shift)&511];if(!(e&1)||(e&128))return (void *)0;t=(uint64_t *)(e&MASK);}return &t[(va>>12)&511];
+}
+bool mmu_identity(uint64_t p,bool writable){uint64_t *e=mmu_leaf(boot_pml4,p);if(!e||!(*e&1))return false;*e=(*e|PAGE_NX)&~PAGE_WRITE;if(writable)*e|=PAGE_WRITE;invlpg(p);return true;}
+void mmu_harden(void){
+ extern uint8_t __text_start[],__text_end[],__rodata_end[];
+ for(uint64_t p=0;p<PHYS_LIMIT;p+=4096){uint64_t *e=mmu_leaf(boot_pml4,p);if(!e||!(*e&1))panic("identity protection");
+  *e|=PAGE_NX;
+  if(p>=(uint64_t)__text_start&&p<(uint64_t)__text_end)*e=(*e&~(PAGE_NX|PAGE_WRITE));
+  else if(p>=(uint64_t)__text_end&&p<(uint64_t)__rodata_end)*e&=~PAGE_WRITE;
+ }
+ /* Retire writable/executable aliases used exclusively by the V1 fault probe. */
+ for(uint64_t p=0x50000000;p<=0x50001000;p+=4096){uint64_t *e=mmu_leaf(boot_pml4,p);if(e)*e=0;}
+ __asm__ volatile("movq %0,%%cr3"::"r"((uint64_t)boot_pml4):"memory");hardened=true;uart_puts("MMU steady-state W^X: kernel RX, data NX, executable aliases read-only\n");
+}
 void pmm_init(uint64_t end,uint64_t reserved) {
  uint64_t f;
  memset(free_bits,0,sizeof free_bits); memset(summary,0,sizeof summary); top=0;
@@ -22,6 +38,7 @@ uint64_t pmm_alloc_frame(void) {
 bool pmm_free_frame(uint64_t p) {
  uint64_t f=p/4096,w=f/64,s=w/64;
  if(p%4096||f<first_frame||f>=last_frame||(free_bits[w]&(1ULL<<(f%64)))) return false;
+ if(hardened&&!mmu_identity(p,true))return false;
  free_bits[w]|=1ULL<<(f%64); summary[s]|=1ULL<<(w%64); top|=1ULL<<s; return true;
 }
 bool mmu_map(uint64_t *root,uint64_t va,uint64_t pa,uint64_t flags) {
@@ -33,6 +50,8 @@ bool mmu_map(uint64_t *root,uint64_t va,uint64_t pa,uint64_t flags) {
   if(flags&PAGE_USER) *e|=PAGE_USER;
   t=(uint64_t *)(*e&MASK);
  }
+ if(hardened&&(flags&PAGE_WRITE))flags|=PAGE_NX;
+ if(hardened&&(flags&PAGE_USER)&&!(flags&PAGE_NX)&&!mmu_identity(pa,false))return false;
  t[(va>>12)&511]=pa|flags|PAGE_PRESENT; invlpg(va); return true;
 }
 static bool clearing;

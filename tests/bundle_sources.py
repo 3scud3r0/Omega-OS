@@ -9,7 +9,7 @@ paths += sorted(p for p in Path('user').rglob('*') if p.suffix in ('.c','.h','.l
 paths += sorted(Path('tools').glob('*.py'))
 paths += sorted(Path('docs').glob('*.md'))
 paths += sorted(p for p in Path('vendor/omega').rglob('*') if p.suffix in ('.omega','.py','.json','.md'))
-for generated in ['build/omega_generated.c','build/omega_seed_report.json']:
+for generated in ['build/omega_generated.c','build/omega_seed_report.json','build/consensus_vectors.h']:
     if Path(generated).exists(): paths.append(Path(generated))
 paths += [Path('src/crypto/LICENCE.md'),Path('src/crypto/UPSTREAM.json')]
 if Path('build/capsule.h').exists(): paths.append(Path('build/capsule.h'))

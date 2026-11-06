@@ -1,4 +1,5 @@
 #include "udp.h"
+#include "consensus.h"
 #include "net.h"
 #include "mmu.h"
 #include "crypto/monocypher.h"
@@ -17,8 +18,9 @@ void net_boot_config(uint32_t info){
  if(!(mb[0]&8)||mb[5]!=1)return;
  if(mb[6]>PHYS_LIMIT-16)panic("network module descriptor");
  const uint32_t *module=(const uint32_t *)(uint64_t)mb[6];start=module[0];end=module[1];
- if(start>=end||end>PHYS_LIMIT||end-start!=128)panic("network module bounds");
+ if(start>=end||end>PHYS_LIMIT||(end-start!=128&&end-start!=400))panic("network module bounds");
  uint8_t *p=(uint8_t *)(uint64_t)start;
+ if(end-start==400){consensus_provision(p,400);return;}
  for(unsigned i=0;i<8;i++)if(p[i]!=magic[i])panic("network config domain");
  crypto_blake2b(digest,32,p,96);if(crypto_verify32(digest,p+96))panic("network config checksum");
  memcpy(&net_config.local_ip,p+12,4);memcpy(&net_config.peer_ip,p+16,4);memcpy(&net_config.gateway,p+20,4);memcpy(&net_config.mask,p+24,4);
@@ -33,6 +35,7 @@ static bool arp(uint16_t op,const uint8_t *destination,uint32_t target){
  if(op==2)memcpy(p+32,destination,6);
  put32(p+38,target);return net_send(60);
 }
+void udp_select(uint32_t ip,uint16_t port){uint32_t hop=next_hop();net_config.peer_ip=ip;net_config.peer_port=port;if(next_hop()!=hop){resolved=false;last_arp=0;}}
 uint8_t *udp_tx_payload(void){return net_tx_buffer()+42;}
 bool udp_send(const uint8_t *body,size_t n){
  uint8_t *p=net_tx_buffer();uint64_t mac=net_mac();uint16_t length=(uint16_t)(n+8),check;
@@ -43,7 +46,7 @@ bool udp_send(const uint8_t *body,size_t n){
  put16(p+34,net_config.local_port);put16(p+36,net_config.peer_port);put16(p+38,length);if(body!=p+42)memcpy(p+42,body,n);
  check=finish(sum(p+26,8,sum(p+34,length,17+length)));put16(p+40,check?check:65535);return net_send(42+n);
 }
-bool udp_receive(const uint8_t **body,size_t *n){
+bool udp_receive_from(const uint8_t **body,size_t *n,uint32_t *source,uint16_t *port){
  const uint8_t *p;size_t length;uint32_t ip;uint16_t total,udp_length;
  if(!net_receive(&p,&length))return false;
  if(length>=42&&be16(p+12)==0x806&&be16(p+14)==1&&be16(p+16)==0x800&&p[18]==6&&p[19]==4){
@@ -52,10 +55,11 @@ bool udp_receive(const uint8_t **body,size_t *n){
   if(ip==next_hop()&&be32(p+38)==net_config.local_ip&&(be16(p+20)==1||be16(p+20)==2)){memcpy(next_mac,p+22,6);resolved=true;}
   net_release();return false;
  }
- if(length<42||be16(p+12)!=0x800||p[14]!=0x45||p[23]!=17||!p[22]||be16(p+20)&0x3fff||finish(sum(p+14,20,0))||be32(p+26)!=net_config.peer_ip||be32(p+30)!=net_config.local_ip){net_release();return false;}
+ if(length<42||be16(p+12)!=0x800||p[14]!=0x45||p[23]!=17||!p[22]||be16(p+20)&0x3fff||finish(sum(p+14,20,0))||be32(p+30)!=net_config.local_ip){net_release();return false;}
  total=be16(p+16);udp_length=be16(p+38);
- if(total<28||total>length-14||udp_length<8||udp_length!=total-20||be16(p+34)!=net_config.peer_port||be16(p+36)!=net_config.local_port||
+ if(total<28||total>length-14||udp_length<8||udp_length!=total-20||be16(p+36)!=net_config.local_port||
     (be16(p+40)&&finish(sum(p+26,8,sum(p+34,udp_length,17+udp_length))))){net_release();return false;}
- *body=p+42;*n=udp_length-8;return true;
+ *source=be32(p+26);*port=be16(p+34);*body=p+42;*n=udp_length-8;return true;
 }
+bool udp_receive(const uint8_t **body,size_t *n){uint32_t ip;uint16_t port;if(!udp_receive_from(body,n,&ip,&port))return false;if(ip!=net_config.peer_ip||port!=net_config.peer_port){net_release();return false;}return true;}
 void udp_release(void){net_release();}

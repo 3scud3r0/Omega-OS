@@ -6,6 +6,7 @@
 #include "virtio_blk.h"
 #include "smp.h"
 #include "runtime.h"
+#include "consensus.h"
 #include "net.h"
 #include "udp.h"
 /* No external assembler: .code32 trampoline and .code64 C entry in this TU. */
@@ -29,7 +30,7 @@ __asm__(
 "movl %edx,%edi\nmovl %ebp,%esi\n"
 "movl %cr4,%eax\norl $0x20,%eax\nmovl %eax,%cr4\n"
 "movl $boot_pml4,%eax\nmovl %eax,%cr3\n"
-"movl $0xc0000080,%ecx\nrdmsr\norl $0x100,%eax\nwrmsr\n"
+"movl $0xc0000080,%ecx\nrdmsr\norl $0x900,%eax\nwrmsr\n"
 "lgdt gdt_ptr\nmovl %cr0,%eax\norl $0x80010000,%eax\nmovl %eax,%cr0\n"
 "ljmp $8,$long_entry\n.code64\nlong_entry:\n"
 "movw $16,%ax\nmovw %ax,%ds\nmovw %ax,%es\nmovw %ax,%ss\n"
@@ -77,7 +78,7 @@ void kmain(uint32_t magic,uint32_t info) __attribute__((used,externally_visible)
 void kmain(uint32_t magic,uint32_t info) {
  uint64_t phys[3],available,start,cycles,dirty; unsigned i; bool crash_test=false,stress=false;
  omega_task_t *tasks[2]; uint8_t *probe=(uint8_t *)0x40002000;
- uart_init(); uart_puts("[OMEGA-OS V3] BOOT x86-64\n");
+ uart_init(); uart_puts("[OMEGA-OS V4] BOOT x86-64\n");
  idt_init();
  require(magic==0x2badb002&&info<PHYS_LIMIT-32,"Multiboot data");
  { const uint32_t *mb=(const uint32_t *)(uint64_t)info;
@@ -153,6 +154,7 @@ void kmain(uint32_t magic,uint32_t info) {
  }
  isolation_test((uint64_t)tasks[0]);
  require(sls_restore((uint64_t)tasks[0])&&omega_verify_contract(tasks[0]),"post-isolation restore");
+ mmu_harden();
  (void)net_init();
  if(!runtime_run()){uart_puts("REJECTED V3: mutation quarantined; kernel context retained; HLT\n");for(;;)__asm__ volatile("cli; hlt");}
  if(stress){
@@ -163,8 +165,9 @@ void kmain(uint32_t magic,uint32_t info) {
   for(i=0;i<2;i++)require(sls_restore((uint64_t)tasks[i])&&omega_verify_contract(tasks[i]),"GC stress restore");
   uart_puts("TEST GC 160 durable multipage commits on bounded disk PASS\n");
  }
+ if(cluster_config.enabled)consensus_run();
  net_test();
  uart_puts("CPU TSC cycles: "); uart_put_dec(cycles);
- uart_puts("\nSTABLE V3: compiler/cognition/GC/tunnel complete; HLT\n");
+ uart_puts("\nSTABLE V4: native/incubator/GC/tunnel complete; HLT\n");
  for(;;) __asm__ volatile("cli; hlt");
 }

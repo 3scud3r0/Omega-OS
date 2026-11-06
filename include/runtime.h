@@ -1,6 +1,8 @@
 #ifndef OMEGA_RUNTIME_H
 #define OMEGA_RUNTIME_H
 #include "idt.h"
+void runtime_resume(void);
+const void *runtime_nomination(void);
 bool runtime_run(void);
 void runtime_source(const char *source,size_t n);
 bool runtime_active(void);

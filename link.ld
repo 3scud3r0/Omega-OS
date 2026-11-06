@@ -4,9 +4,14 @@ PHDRS { code PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6); }
 SECTIONS {
  . = 0x100000;
  .multiboot : { KEEP(*(.multiboot)) } :code
+ . = ALIGN(4096);
+ __text_start = .;
  .text : { *(.text.boot) *(.text .text.*) } :code
+ . = ALIGN(4096);
+ __text_end = .;
  .rodata : { *(.rodata .rodata.*) } :code
  . = ALIGN(4096);
+ __rodata_end = .;
  .data : { *(.data .data.*) } :data
  . = ALIGN(4096);
  __bss_start = .;

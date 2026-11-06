@@ -1,220 +1,156 @@
-# Omega-OS V3 — compactação, túnel e compilação no convidado
+# Omega-OS V4 — execução nativa e linhagens com maioria assinada
 
-Núcleo experimental x86-64 C99 freestanding. Esta fase implementa quatro
-mecanismos com execução e testes reais, sem declarar soberania total, prova
-formal do sistema ou imunidade geral a falhas de hardware.
+Kernel experimental x86-64 C99 freestanding. O compilador Ômega em Ring 3 gera
+código nativo; uma incubadora mantém 16 linhagens tipadas; três nós replicam
+checkpoints assinados sobre túneis cifrados. Código e testes executam instruções
+reais em QEMU. O projeto não possui uma prova formal completa nem certificação
+para produção.
 
-| Ponto | Implementação | Evidência |
-|---|---|---|
-| GC do SLS | Compactação CoW em duas regiões, com aposentadoria durável das raízes antigas | 160 commits multipágina numa imagem fixa de 1 MiB; reboot; oito fronteiras SIGKILL |
-| Rede protegida e roteamento | X25519 estático/efêmero, ChaCha20-Poly1305, janela anti-replay, IPv4/UDP e ARP de gateway | Duas VMs em sub-redes diferentes, injeção de falsificações/replays, reboot e página replicada |
-| Compilador no Ring 3 | `compiler.omega` original, runtime freestanding, modo IR, backend de bytecode e admissão delegada | Texto recebido após boot gera uma cápsula e um novo PID sem ferramentas do host |
-| Motores Ômega | E-graph original, PUCT com priors tensoriais racionais e aritmética exata numa página SLS mapeada | Extração equivalente `x`, síntese de `2*x+1`, resultado `1/2` e checkpoint persistente |
+| Mecanismo | Implementação e evidência |
+|---|---|
+| JIT racional | Emissão x86-64, overflow detectado, MDC Euclidiano e gás; 1.002 execuções nativas comparadas a `Fraction` |
+| W^X | Syscall 11, página privada, auditoria canônica completa, RX no usuário e alias físico RO+NX; rearmamento remove execução antes de devolver escrita |
+| Incubadora | Pool de 16 genomas; 50 mutações por burst; comparação racional exata; promoção somente com bytes não maiores e ciclos estritamente menores |
+| Processos | 16 CR3 privados simultaneamente; filhos executam cópias privadas do código nativo; tabelas e frames dos filhos mortos são reciclados entre bursts |
+| Rede e persistência | Propostas/votos/certificados Ed25519, três túneis X25519/ChaCha20-Poly1305, lock de voto durável e checkpoint SLS CoW com FLUSH |
+| Recuperação | Líder isolado não publica linhagem; SIGKILL do terceiro nó antes e depois da publicação; recuperação do disco e sincronização online |
 
-Histórico: [V2](docs/V2.md) e [V1](docs/V1.md). Todos os fontes, incluindo
-proveniência, fonte gerada e cápsulas **públicas**, estão em `omega_os_fontes.txt`.
+Histórico: [V3](docs/V3.md), [V2](docs/V2.md), [V1](docs/V1.md).
+Todos os fontes compilados, fontes geradas e cápsulas **públicas** estão em
+[omega_os_fontes.txt](omega_os_fontes.txt). Chaves privadas e módulos initrd são excluídos.
 
-## Build e validação
+## Compilar e testar
 
-Host: GCC x86-64, GNU binutils, Make, Python 3, OpenSSL 3 e QEMU x86.
-Os testes de interoperabilidade e a ferramenta de provisionamento usam
-`cryptography>=44,<51` no host. Nada disso é linkado ao runtime bare-metal.
-Monocypher 4.0.2 permanece incorporado ao fonte, com licença e hashes originais.
+Host: GCC x86-64, binutils, Make, Python 3, OpenSSL 3, QEMU e
+`cryptography>=44,<51` para provisionamento e referências independentes dos testes.
+O kernel e o compilador de usuário usam `-O3 -flto -Wall -Wextra -Werror -pedantic`,
+C99 freestanding, sem libc, stack protector, red zone ou SIMD. O pequeno loader
+assinado de usuário continua compilado separadamente. Monocypher 4.0.2 tem fontes,
+licença e hashes preservados.
 
 ```sh
-make -j2
-make run DISK=omega-v3.img
-make test
+make clean
+make -j4
 make test-host
+make test-v4 QEMU=/workspace/tools/bin/qemu-system-x86_64
+make test QEMU=/workspace/tools/bin/qemu-system-x86_64
 make bundle
 ```
 
-Nesta máquina: `make test QEMU=/workspace/tools/bin/qemu-system-x86_64`.
-Reutilize o checkout isolado existente; não crie worktrees para executar o projeto.
-O build mantém LTO, `-Werror -pedantic`, `-ffreestanding -nostdlib -fno-builtin`
-e ausência de red zone/SIMD no kernel. O seed de usuário usa C99 freestanding e
-modelo large para o ELF do compilador acima de 2 GiB.
+O caminho QEMU acima é o wrapper instalado neste ambiente; outra máquina pode
+usar `QEMU=qemu-system-x86_64`. Reutilize o checkout isolado existente; não crie
+worktrees para executar o projeto. Nenhum serviço do host precisa ficar ativo.
+`make run DISK=omega-v4.img` executa o ensaio local de 50 ciclos, depois HLT.
+`make clean` preserva as imagens de disco do usuário; testes substituem somente
+os próprios arquivos em `build/`.
 
-Os testes criam apenas imagens em `build/`, nunca sobrescrevem a imagem do
-usuário e encerram somente os emuladores que iniciaram. `make clean` preserva
-as imagens do usuário. O formato V1 continua sendo recusado sem alteração.
-V2 é legível quando a árvore e o cursor cabem integralmente na primeira região;
-logs V2 que já atravessam a metade da imagem exigem migração offline, não
-compactação destrutiva. Não há ferramenta de migração nessa entrega.
+`make test-v4` inicia três VMs em 10.21/22/23.0.0/24, com gateway ARP e roteamento
+IPv4 no harness. Verifica a página no disco com parser CRC64 independente e
+confere as assinaturas com a biblioteca `cryptography` do host. Compara o JIT
+com o avaliador V3 usando a mesma expressão e relógio, sem impor um ganho fixo.
+Valida dois epochs e 100 ciclos no mesmo processo compilador, incluindo reciclagem
+de processos. O teste rejeita qualquer ensaio no qual o tempo medido não melhore.
+A suíte completa preserva as oito fronteiras SIGKILL do SLS, GC de 160 commits
+num disco de 1 MiB, corrupção, isolamento, rede V3 e recusa do formato V1.
 
-## 1. Compactação CoW e recuperação
+## Emissão nativa, auditoria e recuperação
 
-O disco é dividido em duas regiões após os superblocos. Cada transação continua
-fazendo CoW e publicação atômica global, sob as hipóteses de FLUSH descritas na V2.
-Quando falta espaço para a próxima transação, o GC percorre a árvore, conta o
-conjunto vivo e o copia para a outra região. Não existe tabela de objetos
-mortos crescente nem alocação de RAM proporcional ao tamanho do disco.
+O frontend original `compiler.omega` continua executando no convidado. Sua IR
+escalar é convertida em instruções x86-64: literais `movabs`, soma/subtração,
+`imul` com teste de overflow, divisão e redução por MDC. O certificado tipado
+linear continua existindo como formato de admissão e referência de resultados;
+o filho executa a função nativa diretamente, sem interpretador no seu caminho
+de execução. Não se trata de remover o formato de provas/certificados.
 
-Antes de reutilizar a região de destino, o kernel publica a raiz corrente em
-**ambos** os superblocos, com FLUSH após cada publicação. Assim nenhuma raiz
-retida referencia a região que será sobrescrita. Copia dados e nós, executa
-FLUSH e só então publica a raiz compactada. Uma queda durante a cópia mantém
-a raiz antiga alcançável. Os setores obsoletos podem então ser reutilizados.
+A syscall 11 aceita exclusivamente a página JIT 0x83000000 do compilador e um
+comprimento válido. O kernel reproduz o encoder e compara **todos os 4096 bytes**,
+incluindo saltos internos e a cauda INT3. Instruções fora dos templates são
+rejeitadas; não há busca ingênua por substrings em constantes. A disciplina de
+entrada única depende do ELF assinado do compilador. Isso não é um sandbox SFI
+para x86 arbitrário: processos continuam dependendo de MMU, Ring 3 e preempção.
+Syscalls verificam o PC do ELF e a pilha antes de realizar qualquer serviço.
 
-O consumo físico permanece limitado para um conjunto vivo e orçamento de
-transação que caibam numa região. Não é possível armazenar crescimento ilimitado
-num disco finito. O GC é stop-the-world no BSP, tem custo proporcional ao conjunto
-vivo e não oferece latência de tempo real. Usa reserva conservadora para todos
-os frames registrados. Conjunto vivo grande demais, erro de I/O ou esgotamento
-de contadores falha fechado. Não há descarte seguro de dados antigos nem gestão
-de bad blocks/desgaste físico.
+Após os testes legados de isolamento, a MMU ativa proteção estável: texto do
+kernel RX, rodata RO+NX, dados RW+NX, código de usuário RX e alias físico RO+NX.
+As permissões transitórias do bootstrap são aposentadas antes do runtime.
+O AP permanece quiescente; o escalonador de processos roda no BSP. Não existe
+um protocolo geral de shootdown para processos executando em vários cores.
 
-A árvore mantém capacidade lógica de 64 GiB; o PMM ainda é de 64 MiB, com até
-4.096 páginas registradas. Capacidade lógica não equivale a RAM residente ou
-capacidade útil de uma imagem de 32 MiB. CRC64 detecta corrupção, não autentica
-disco adversarial. SIGKILL em oito fronteiras não é prova universal de tolerância
-a qualquer corte elétrico ou comportamento de firmware.
+O código tem no máximo uma página, operandos em pilha de profundidade 32 e
+certificado de até 256 operações. Operações e iterações do MDC consomem gás
+compartilhado de 2048. Overflow ou divisão indefinida falham fechado; o backend
+pode recusar intermediários que um algoritmo com cancelamento prévio aceitaria.
+A ABI de saída é uma fração reduzida int64/int64. Não há ponto flutuante.
 
-Os hooks `sls.crash=1..4` cobrem escrita/publicação normal; `5..8` cobrem
-aposentadoria de raízes, cópia do GC, FLUSH e publicação compactada.
-`sls.stress` executa 160 commits adicionais para verificar reutilização real.
+Uma chamada guardada registra no kernel a continuação do ELF e a pilha antes
+de executar o JIT. #PF/#GP/#UD/#DE dentro dessa região restaura a página cognitiva
+do último checkpoint e retoma a continuação com falha. O teste cruza o limite
+da capacidade SLS: a primeira escrita altera a página; a segunda gera #PF.
+A incubadora continua e o checkpoint anterior é restaurado. Outros processos
+infratores continuam sendo colocados em quarentena pelo runtime normal.
 
-## 2. Túnel autenticado sobre IPv4/UDP
+## Incubação, cotas e continuidade
 
-O transporte usa VirtIO-Net legacy, IPv4 sem fragmentação, UDP com checksum,
-ARP e seleção de next-hop por máscara/gateway. O teste usa **duas sub-redes**,
-10.21.0.0/24 e 10.22.0.0/24, com um roteador de teste entre elas. Não depende de
-VPN externa ou pilha Linux no convidado. Não foi validado um enlace na Internet
-pública; endereçamento, encaminhamento e eventuais portas NAT pertencem ao
-ambiente onde os nós forem implantados.
+A gramática de mutação é finita: anel racional escalar, comutação, distribuição
+e eliminação de neutros/folding para expressões equivalentes a 24. Cada ciclo consulta o e-graph original para checar a equivalência polinomial e
+a extração de constante, e executa o PUCT racional para orientar a forma.
+A arena temporária e o gás do frontend são reiniciados entre essas consultas;
+os genomas copiados no pool não contêm ponteiros para a arena.
+Esta versão não demonstra evolução aberta, novos teoremas Lean ou aprendizagem
+neural. Genomas são estruturas e expressões tipadas, não mutações de bytes.
 
-Cada nó recebe uma identidade X25519 e a chave pública fixada do par por módulo
-Multiboot/initrd confiável. A chave privada não fica no ELF, Git ou TXT. O módulo
-original é apagado da RAM após a cópia; a chave de identidade é apagada depois
-da derivação inicial. RDRAND fornece entropia efêmera e nonce de boot. Ausência
-ou falha dessa fonte encerra a inicialização do túnel, sem fallback por relógio.
-Os testes usam `-cpu max` para expor essa capacidade no QEMU.
+O ancestral expandido calcula efetivamente as operações neutras. Seus extratos
+menores são medidos por RDTSCP/LFENCE quando disponível; há fallback serializado
+RDTSC para CPUs sem RDTSCP. O QEMU de rede usa `-cpu max`. A medição usa o menor
+de sete lotes de 32 execuções, reduzindo interrupções na comparação. Não há
+números de ciclos fabricados nem garantia de tempo físico em nanossegundos.
+Se nenhum mutante dominar o ancestral no primeiro burst, o ensaio falha.
 
-O handshake autentica chave efêmera, nonce, IP e contador de boot com BLAKE2b
-keyed derivado do DH estático. O DH efêmero e o transcript produzem chaves
-direcionais. Cada pacote usa ChaCha20-Poly1305 IETF com contador único, AAD e
-janela deslizante de 64 números de sequência. Só um MAC válido avança a janela.
-HELLO repetido não reinicializa contadores. Boot counters e fingerprints do par
-são persistidos antes da aceitação dos dados da sessão; novo boot usa novo
-transcript e novas chaves. O estado secreto de sessão é apagado ao terminar.
+O processo compilador mantém arena e pool entre bursts. Depois de um checkpoint
+certificado, o serviço de rede retoma esse mesmo contexto Ring 3 para mais
+50 ciclos, devolvendo o controle ao kernel entre bursts. São criados 15 filhos
+simultâneos, com código/pilha/dados privados, ao lado do compilador. Os filhos
+mortos são desmontados antes de reutilizar seus slots. As cotas de timer são
+renovadas por burst; o gás do JIT e a arena estática limitam cada candidato.
+Esse caminho não é um `fork` POSIX geral nem oferece alocação ilimitada.
 
-É um protocolo experimental próprio, **não** uma implementação interoperável
-ou auditada de Noise/WireGuard. Testes de primitivas e de ataques selecionados
-não constituem prova criptográfica do protocolo completo. Não há PKI automática,
-NAT traversal, DHCP, DNS, IPv6, mesh com descoberta, consenso ou proteção contra
-DoS. A confiança depende do provisionamento/bootloader e da entropia do hardware;
-não há TPM, secure boot ou defesa contra host malicioso lendo a RAM.
+## Consenso: contrato de segurança explícito
 
-A aplicação transfere uma página cognitiva inteira em quatro fragmentos
-cifrados, com epoch e hash BLAKE2b do snapshot. Somente após reassemblagem e
-checagem ela é confirmada no SLS do receptor. Repetições são idempotentes e
-há retransmissão limitada por timeout. Essa é replicação de snapshot de aplicação,
-não consenso nem sincronização automática de toda a árvore lógica de 64 GiB.
+**Dois votos em três nós não constituem BFT geral com um nó bizantino.**
+Dois quóruns podem se intersectar somente no nó malicioso. Esta implementação
+oferece maioria assinada com líder fixo (nó 1), assumido honesto, e locks de voto
+duráveis. Tolera a indisponibilidade de um seguidor. Não possui eleição de líder,
+view change ou progresso se o líder falhar. Um protocolo BFT clássico para f=1
+requer pelo menos quatro réplicas e quórum três, além das fases de consenso.
 
-O ciphertext é produzido no buffer DMA de TX. RX usa empréstimo do buffer;
-a cópia para estado persistente é intencional. Quando o túnel está configurado,
-a syscall de Ethernet bruto fica desabilitada para impedir bypass em texto claro.
-Sem NIC, a rede é explicitamente omitida; `make test` exige os dois nós com NIC.
+Cada cluster tem três identidades X25519/Ed25519 distintas e chaves públicas
+fixadas no módulo de boot. As chaves privadas ficam em BSS após provisionamento,
+sem segredo estático dentro do ELF. O módulo original e seeds temporários são
+apagados. `tools/cluster_config.py --output-dir build/meu-cluster` gera módulos
+privados 0600, recusando sobrescrita; guarde-os para reiniciar as mesmas identidades.
+O teste fornece esses módulos por `-initrd` e um roteador de laboratório.
 
-### Provisionar os pares
+Uma proposta contém epoch lógico, hash anterior e hash BLAKE2b do manifesto
+completo de linhagens. O voto Ed25519 cobre domínio, identidade do cluster,
+epoch e ambos os hashes. O seguidor valida conteúdo e assinatura do líder,
+grava seu lock no SLS com FLUSH e somente então envia o voto. O certificado
+exige duas identidades distintas, incluindo o líder. O kernel verifica esse
+certificado novamente ao persistir a página de linhagem 0x40006000.
 
-Execute em máquina confiável e troque apenas os arquivos públicos:
+O checkpoint distribuído identifica **conteúdo lógico**, porque os LBAs e
+raízes físicas CoW são locais a cada disco. Os demais metadados locais (boot,
+floors anti-replay, locks de voto e checkpoints de trabalho) continuam podendo
+ser gravados sem quórum. Bloqueá-los impediria iniciar o protocolo. O epoch
+lógico da linhagem e a geração física do SLS são contadores diferentes.
+Nenhuma linhagem é publicada sem certificado; mutantes locais não publicados
+podem existir em RAM. A proposta do líder também é registrada antes do lock: após reiniciar, ele
+retoma exatamente o mesmo conteúdo, sem assinar uma proposta conflitante.
+O certificado e o manifesto são publicados na mesma
+transação CoW da V3. Um nó atrasado pode instalar um checkpoint completo
+certificado mais novo, sem reproduzir LBAs ou todo o histórico do par.
 
-```sh
-python3 tools/peer_config.py keygen --private /secure/a.key --public a.pub
-python3 tools/peer_config.py keygen --private /secure/b.key --public b.pub
-python3 tools/peer_config.py config --private-file /secure/a.key \
-  --peer-public-file b.pub --local-ip 10.21.0.2 --peer-ip 10.22.0.2 \
-  --gateway 10.21.0.1 --prefix 24 --output /secure/a.conf
-```
-
-Gere a configuração inversa para B. Os arquivos de configuração contêm material
-privado e são criados em modo 0600; não publique esses arquivos. Passe
-`-initrd /secure/a.conf -cpu max` ao QEMU com NIC VirtIO e conectividade Ethernet
-adequada. O módulo tem 128 bytes: domínio, tamanho, IPv4/portas, chave privada,
-chave pública do par e checksum BLAKE2b. A política confia no carregador desse
-módulo, não em um checksum como autenticação de provisionamento.
-
-## 3. Compilação dentro do Ring 3
-
-Fontes originais: `3scud3r0/Omega`, commit
-`47dd6a20f1699ac6e54ece82397ae64fa78493c4`. Estão preservados em `vendor/omega`,
-com hashes e manifesto de derivação. `tests/bootstrap_omega.py` usa o seed
-original **somente no build inicial**, para gerar C do compilador e do e-graph.
-O convidado executa a entrada `principal` original no modo `--ir`, com entrada
-e saída em memória e um runtime freestanding de valores.
-
-Fluxo validado após o boot:
-
-1. O produtor recebe texto numa página privada e o envia ao processo compilador.
-2. O compilador original faz lexing, parsing e checagem de formas; o backend do
-   convidado emite bytecode escalar racional.
-3. A admissão verifica formato, gás, pilha, normalização, overflow e divisão
-   por zero. Somente o compilador autenticado tem a capacidade de delegar.
-4. Um novo espaço de endereçamento/PID executa o bytecode em Ring 3 e verifica
-   seu resultado contra o certificado calculado na admissão.
-
-O seed do compilador é um ELF autenticado por Ed25519. A nova cápsula recebe
-**delegação restrita**, não uma assinatura fabricada com chave privada dentro
-do kernel. Ela não permite carregar código nativo arbitrário. Nenhum GCC,
-Python, OpenSSL ou linker é chamado durante essa sequência no convidado.
-
-O backend dinâmico aceita escalares, variáveis, `+ - * /` e negação, com pilha
-32, até 256 operações e cápsula de até 4 KiB. A aritmética é racional exata
-limitada a int64; overflow é rejeitado. O runtime de valores possui arena fixa
-de 8 MiB, identificadores ASCII e limites de JSON/recursão. Não é GMP nem a
-linguagem Ômega inteira. Não há compilação do próprio kernel, backend nativo
-completo ou fechamento integral da auto-hospedagem de todas as dependências.
-
-O exemplo executa um trabalho de compilação e cria um filho, sob orçamento.
-Não é um serviço ilimitado de spawn/exec. Mutações inválidas são colocadas em
-quarentena e preservam o checkpoint anterior, em vez de autorizar código falso.
-Para testar outro texto sem rebuild:
-
-```sh
-# acrescente ao comando QEMU normal:
--append 'omega.source=tensor result = (1/3+1/6)*12; mostrar result;'
-```
-
-Os testes verificam `24`, `6`, `-9/4`, `5` e a rejeição de divisão por zero.
-
-## 4. Motores e estado cognitivo exato
-
-O e-graph executa o `execute()` original do Ômega: union-find, congruência,
-reescritas de anel, extração por custo e verificação polinomial independente.
-O exemplo `(x+0)*1` resulta em `x`; há orçamento de 64 e-nodes e quatro rodadas.
-Não se afirma ótimo global ou saturação de programas arbitrários.
-
-A busca PUCT é uma adaptação racional finita de `omega_synth_mcts/search.py`:
-gramática afim `a*x+b`, coeficientes -2..2, priors de um tensor racional 2x3,
-exploração por raiz inteira e até 192 iterações. Encontra `2*x+1` e confere os
-coeficientes independentemente. Não porta PyTorch, CUDA, o guia neural completo
-ou os certificados Lean do repositório original.
-
-O compilador recebe uma capacidade explícita para uma página SLS: alias privado
-0x80004000 e alias supervisor 0x40005000. Calcula `1/3+1/6=1/2` diretamente nos
-operandos/resultados dessa página. A confirmação valida e canonicaliza o registro,
-que inclui resultado compilado, e-graph, PUCT e resultado do novo filho. Os dois
-relatórios precisam estar completos antes de publicar o checkpoint.
-
-A rede replica essa página como dados, sem executá-la nem tratá-la como prova
-formal. O restante dos processos continua privado; a execução de usuários fica
-no BSP, com AP usado para o teste SMP da base. Não há migração de processos,
-agendamento por energia ou prova Lean da máquina inteira.
-
-## Testes
-
-`make test` recompõe o caminho de hardware: oito fronteiras SIGKILL, GC em disco
-limitado, fallback de raiz após corrupção de payload exclusivo, reboot, três fontes alternativas, mutação inválida com checkpoint
-preservado, dois nós roteados, falsificação/replay, reassemblagem, persistência
-e reboot dos contadores. Os discos são inspecionados independentemente no host.
-
-`make test-host` conserva RFC8032, testes de admissão/racionais/SPSC e acrescenta
-interoperabilidade X25519/RFC8439 com `cryptography`, janela anti-replay,
-reordenação, reboot e limites do bytecode. Teste passado é evidência delimitada,
-não certificação industrial. O histórico V2 é recuperável no Git; seu runner de
-rede em texto claro foi substituído, sem alegar compatibilidade daquele protocolo.
-
-`nm -u build/omega64.elf` e `nm -u build/compiler.elf` não devem listar dependências
-externas. `make bundle` inclui fontes gerados e cápsulas públicas; exclui as
-identidades/configurações privadas de rede e a chave Ed25519 de desenvolvimento.
+As sessões mantêm contadores de boot e floors anti-replay duráveis por par.
+Há retransmissão e reassembly limitado a quatro fragmentos. Os nós preservam o
+serviço após publicação para recuperar pares reiniciados. O ensaio usa SIGKILL
+real, mas não simula firmware de SSD mentindo sobre FLUSH, rollback malicioso
+de discos, comprometimento do kernel ou extração física de chaves.
