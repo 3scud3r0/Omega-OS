@@ -1,6 +1,6 @@
 """Create a reviewable, deterministic text bundle of all source/build/test files."""
 from pathlib import Path
-paths = [Path('README.md'), Path('Makefile'), Path('link.ld'), Path('.gitignore')]
+paths = [Path('README.md'), Path('Makefile'), Path('link.ld'), Path('.gitignore'), Path('requirements-test.txt')]
 paths += sorted(Path('include').rglob('*.h'))
 paths += sorted(Path('src').rglob('*.c'))
 paths += sorted(Path('tests').glob('*.py'))

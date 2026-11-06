@@ -1,4 +1,5 @@
 #include "consensus.h"
+#include "cortex.h"
 #include "runtime.h"
 #include "incubator.h"
 #include "mmu.h"
@@ -29,6 +30,7 @@ static bool content(const lineage_record_t *r){
  crypto_blake2b(hash,32,r->payload,sizeof r->payload);if(crypto_verify32(hash,r->hash))return false;
  if(compare(r->payload,"OMEGA-LINEAGE-V4",16))return false;
  for(unsigned i=0;i<16;i++){omega_organism_t o;memcpy(&o,r->payload+16+i*sizeof o,sizeof o);if(o.lineage!=i+1||o.generation>(1ULL<<62)||!o.cycles||!o.bytes||o.bytes>4096||o.value.num!=24||o.value.den!=1||o.genome[95])return false;}
+ cortex_checkpoint_t cortex;memcpy(&cortex,r->payload+CORTEX_MANIFEST_OFFSET,sizeof cortex);if(cortex.magic&&!cortex_checkpoint_valid(&cortex))return false;
  for(unsigned i=0;i<sizeof r->padding;i++)if(r->padding[i])return false;
  return true;
 }
@@ -41,7 +43,7 @@ void consensus_provision(uint8_t *p,size_t n){
  memcpy(&size,p+8,4);memcpy(&self,p+12,4);if(size!=400||self>=3)panic("cluster module membership");
  crypto_blake2b(digest,32,p,368);if(crypto_verify32(digest,p+368))panic("cluster module checksum");
  memcpy(cluster_config.member,p+128,240);crypto_blake2b(digest,32,p+128,240);if(crypto_verify32(digest,p+96))panic("cluster identity hash");
- memcpy(cluster_config.id,digest,32);cluster_config.self=self;
+ memcpy(cluster_config.id,digest,32);cluster_config.self=self;memcpy(&cluster_config.burst_ticks,p+24,8);if(!cluster_config.burst_ticks)cluster_config.burst_ticks=10000000000ULL;if(cluster_config.burst_ticks<1000000000ULL||cluster_config.burst_ticks>1000000000000ULL)panic("cluster inference cadence");
  for(unsigned i=0;i<3;i++){cluster_member_t *m=&cluster_config.member[i];if(m->id!=i+1||!m->ip||!m->port)panic("cluster member address");for(unsigned j=0;j<i;j++)if(m->ip==cluster_config.member[j].ip||!crypto_verify32(m->edkey,cluster_config.member[j].edkey)||!crypto_verify32(m->xkey,cluster_config.member[j].xkey))panic("duplicate cluster identity");}
  memcpy(cluster_config.xsecret,p+32,32);memcpy(seed,p+64,32);crypto_x25519_public_key(pub,cluster_config.xsecret);if(crypto_verify32(pub,cluster_config.member[self].xkey))panic("cluster X25519 identity");
  crypto_ed25519_key_pair(cluster_config.edsecret,pub,seed);if(crypto_verify32(pub,cluster_config.member[self].edkey))panic("cluster Ed25519 identity");
@@ -55,6 +57,7 @@ static void flush(void){if(!mmu_sls_commit(boot_pml4))panic("cluster durable tra
 static bool eligible(const lineage_record_t *r){return r->epoch==published->epoch+1&&(!published->epoch?!compare(r->previous,(uint8_t[32]){0},32):!crypto_verify32(r->previous,published->hash));}
 static bool lock_vote(lineage_record_t *r){
  if(!content(r)||!signature(r,0)||!eligible(r))return false;
+ cortex_checkpoint_t c;memcpy(&c,r->payload+CORTEX_MANIFEST_OFFSET,sizeof c);if(!runtime_cortex_ensure(&c))return false;
  if(durable[2]>r->epoch||(durable[2]==r->epoch&&crypto_verify32((uint8_t *)durable+32,r->hash)))return false;
  if(durable[2]!=r->epoch){durable[2]=r->epoch;memcpy((uint8_t *)durable+32,r->hash,32);flush();}
  uint8_t text[120];statement(text,r);crypto_ed25519_sign(r->signatures[cluster_config.self],cluster_config.edsecret,text,sizeof text);r->voters|=1ULL<<cluster_config.self;return true;
@@ -64,6 +67,7 @@ static void publish(const lineage_record_t *r){
  /* A quorum certificate authenticates a complete application checkpoint.
   * A lagging node may install it without replaying missing local LBAs. */
  if(r->epoch==published->epoch+1&&!eligible(r))return;
+ cortex_checkpoint_t c;memcpy(&c,r->payload+CORTEX_MANIFEST_OFFSET,sizeof c);if(!runtime_cortex_ensure(&c))return;
  authorized_epoch=r->epoch;memcpy(authorized_hash,r->hash,32);
  memcpy(published,r,4096);flush();
  uart_puts("QUORUM durable lineage epoch=");uart_put_dec(r->epoch);uart_puts(" voters=");uart_put_hex(r->voters);uart_puts("\n");announced=true;
@@ -93,7 +97,11 @@ static void propose(void){
   memcpy(&pending,proposal_checkpoint,4096);if(!lock_vote(&pending))panic("recovered proposal lock");uart_puts("QUORUM recovered durable uncommitted proposal\n");return;
  }
  memset(&pending,0,sizeof pending);pending.magic=LINEAGE_MAGIC;pending.epoch=published->epoch+1;if(published->epoch)memcpy(pending.previous,published->hash,32);
- memcpy(pending.payload,nomination,2816);crypto_blake2b(pending.hash,32,pending.payload,sizeof pending.payload);pending.voters=1;uint8_t text[120];statement(text,&pending);crypto_ed25519_sign(pending.signatures[0],cluster_config.edsecret,text,sizeof text);
+ memcpy(pending.payload,nomination,2816);
+ cortex_checkpoint_t next_cortex;memcpy(&next_cortex,pending.payload+CORTEX_MANIFEST_OFFSET,sizeof next_cortex);
+ /* A quarantined/unavailable cortex must not erase its last approved state. */
+ if(!next_cortex.magic&&published->epoch)memcpy(pending.payload+CORTEX_MANIFEST_OFFSET,published->payload+CORTEX_MANIFEST_OFFSET,sizeof next_cortex);
+ crypto_blake2b(pending.hash,32,pending.payload,sizeof pending.payload);pending.voters=1;uint8_t text[120];statement(text,&pending);crypto_ed25519_sign(pending.signatures[0],cluster_config.edsecret,text,sizeof text);
  memcpy(proposal_checkpoint,&pending,4096);flush();
  if(!lock_vote(&pending))panic("leader durable vote lock");
 }
@@ -132,7 +140,7 @@ void consensus_run(void){
   if(announced){uart_puts("TEST quorum certified lineage persisted; service remains available\n");announced=false;}
   /* Retain the same compiler process/arena across bursts. Network service
    * resumes between bounded bursts; no host compiler or child tool runs. */
-  if(published->epoch>last_resumed_epoch&&rdtsc()-last_burst>10000000000ULL){last_resumed_epoch=published->epoch;runtime_resume();last_burst=rdtsc();if(cluster_config.self==0)propose();}
+  if(published->epoch>last_resumed_epoch&&rdtsc()-last_burst>cluster_config.burst_ticks){last_resumed_epoch=published->epoch;runtime_resume();runtime_cortex();last_burst=rdtsc();if(cluster_config.self==0)propose();}
   cpu_pause();
  }
 }

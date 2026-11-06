@@ -28,3 +28,12 @@ const uint8_t *admission_compiler(size_t *length) {
     crypto_ed25519_check(compiler_signature,authority_public,compiler_message,sizeof compiler_message)) panic("compiler authority admission");
  *length=n;return compiler_message+24;
 }
+
+const uint8_t *admission_cortex(size_t *length){
+ uint32_t n,v;const uint8_t *m=cortex_message;static const uint8_t domain[16]="OMEGA-CORTEX-1";
+ if(sizeof cortex_message<24)panic("cortex capsule length");
+ for(unsigned i=0;i<16;i++)if(m[i]!=domain[i])panic("cortex capsule domain");
+ memcpy(&n,m+16,4);memcpy(&v,m+20,4);
+ if(n>1024*1024||24ULL+n+v!=sizeof cortex_message||!vm_verify(m+24+n,v)||crypto_ed25519_check(cortex_signature,authority_public,m,sizeof cortex_message))panic("cortex signature admission");
+ *length=n;return m+24;
+}

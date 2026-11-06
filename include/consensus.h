@@ -6,7 +6,7 @@
 /* Signed majority with a fixed, honest leader. This is NOT general BFT:
  * n=3,q=2 cannot tolerate one equivocating Byzantine identity. */
 typedef struct {uint32_t id,ip;uint16_t port;uint8_t reserved[6],xkey[32],edkey[32];} cluster_member_t;
-typedef struct {bool enabled;unsigned self;uint8_t id[32],xsecret[32],edsecret[64];cluster_member_t member[3];} cluster_config_t;
+typedef struct {bool enabled;unsigned self;uint64_t burst_ticks;uint8_t id[32],xsecret[32],edsecret[64];cluster_member_t member[3];} cluster_config_t;
 extern cluster_config_t cluster_config;
 typedef struct {uint64_t magic,epoch;uint8_t previous[32],hash[32];uint64_t voters;uint8_t signatures[3][64],payload[2816],padding[1000];} lineage_record_t;
 typedef char lineage_page_size[(sizeof(lineage_record_t)==4096)?1:-1];

@@ -74,40 +74,42 @@ static void load(void) {
  loaded=true; uart_puts("SLS global recovered epoch="); uart_put_dec(epoch); uart_puts("\n");
 }
 bool sls_contains(uint64_t va) { for(unsigned i=0;i<count;i++) if(resident[i]==va) return true; return false; }
-bool sls_restore(uint64_t va) {
+bool sls_read_page(uint64_t va,void *out) {
  uint64_t id=(va-BASE)/4096,s,h;
- load(); if(!sls_contains(va)||!root_sector) return false;
+ load(); if(va<BASE||(va&4095)||id>=MAX_LOGICAL||!root_sector) return false;
  s=root_sector; h=root_hash;
  for(unsigned depth=0;depth<3;depth++) {
   unsigned index=(unsigned)((id>>(16-8*depth))&255);
   if(!read_checked(s,h,checks[depth],next_sector)) panic("SLS tree integrity");
   s=checks[depth][2*index]; h=checks[depth][2*index+1]; if(!s) return false;
  }
- if(!read_checked(s,h,(void *)va,next_sector)) panic("SLS payload integrity");
+ if(!read_checked(s,h,out,next_sector)) panic("SLS payload integrity");
  return true;
 }
+bool sls_restore(uint64_t va){return sls_contains(va)&&sls_read_page(va,(void *)va);}
 bool sls_register(uint64_t va) {
  if(va<BASE||(va&4095)||(va-BASE)/4096>=MAX_LOGICAL||count==MAX_RESIDENT||sls_contains(va)) panic("SLS registration bounds");
  resident[count++]=va; return sls_restore(va);
 }
-void sls_begin(void) {
+void sls_begin_pages(unsigned extra) {
  load(); if(transaction) panic("nested SLS transaction");
  memset(working,0,4096);
  if(root_sector&&!read_checked(root_sector,root_hash,working,next_sector)) panic("SLS root read");
- if(root_sector&&(crash_stage>=5||next_sector+(3ULL*count+1)*8>arena_end)) {
-  if(!compact((3ULL*count+1)*8)) panic("SLS live set exceeds GC arena");
+ if(root_sector&&(crash_stage>=5||next_sector+(3ULL*(count+extra)+1)*8>arena_end)) {
+  if(!compact((3ULL*(count+extra)+1)*8)) panic("SLS live set exceeds GC arena");
   if(!read_checked(root_sector,root_hash,working,next_sector)) panic("post-GC root read");
  }
  cursor=next_sector; transaction=true; changed=false;
 }
+void sls_begin(void){sls_begin_pages(0);}
 static bool append(const void *data,uint64_t *s,uint64_t *h) {
  if(!block_valid(cursor,arena_end)) return false;
  *s=cursor; *h=crc64(data,4096); if(!virtio_blk_write_page(cursor,data)) return false;
  cursor+=8; return true;
 }
-bool sls_persist(uint64_t va,const void *data) {
+bool sls_stage_page(uint64_t va,const void *data) {
  uint64_t id=(va-BASE)/4096,s,h; unsigned a=(unsigned)(id>>16),b=(unsigned)((id>>8)&255),c=(unsigned)(id&255);
- if(!transaction||!sls_contains(va)||!consensus_gate(va,data)) return false;
+ if(!transaction||va<BASE||(va&4095)||id>=MAX_LOGICAL||!consensus_gate(va,data)) return false;
  memset(directory,0,4096); memset(leaf,0,4096);
  if(working[2*a]&&!read_checked(working[2*a],working[2*a+1],directory,cursor)) return false;
  if(directory[2*b]&&!read_checked(directory[2*b],directory[2*b+1],leaf,cursor)) return false;
@@ -118,6 +120,7 @@ bool sls_persist(uint64_t va,const void *data) {
  if(!append(directory,&s,&h)) return false;
  working[2*a]=s; working[2*a+1]=h; changed=true; return true;
 }
+bool sls_persist(uint64_t va,const void *data){return sls_contains(va)&&sls_stage_page(va,data);}
 bool sls_commit(void) {
  uint64_t s,h;
  if(!transaction) return false;

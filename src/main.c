@@ -157,6 +157,7 @@ void kmain(uint32_t magic,uint32_t info) {
  mmu_harden();
  (void)net_init();
  if(!runtime_run()){uart_puts("REJECTED V3: mutation quarantined; kernel context retained; HLT\n");for(;;)__asm__ volatile("cli; hlt");}
+ runtime_cortex();
  if(stress){
   for(unsigned round=0;round<160;round++){
    for(i=0;i<2;i++){tasks[i]->epoch++;tasks[i]->proof_hash=omega_contract_token(tasks[i]);}

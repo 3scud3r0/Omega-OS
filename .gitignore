@@ -6,3 +6,7 @@ disk.img
 
 __pycache__/
 *.pyc
+
+# External model weights; source bundles deliberately exclude binary models.
+*.gguf
+*.safetensors

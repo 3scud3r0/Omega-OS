@@ -11,7 +11,7 @@ void *memcpy(void *d,const void *s,size_t n){uint8_t *a=d;const uint8_t *b=s;for
 void *memset(void *p,int c,size_t n){uint8_t *b=p;for(size_t i=0;i<n;i++)b[i]=(uint8_t)c;return p;}
 void *ov_alloc(size_t n){n=(n+7)&~(size_t)7;if(n>sizeof arena-used)omega_fail("Omega static arena exhausted");void *p=arena+used;used+=n;memset(p,0,n);return p;}
 void omega_fail(const char *s){char *p=(char *)0x80003000;size_t n=0;while(s[n]&&n<96){p[n]=s[n];n++;}p[n]=0;(void)syscall(60,n);for(;;)__asm__ volatile("pause");}
-static void emit(V nodes,int64_t id,uint8_t *out,size_t *n,unsigned depth){
+static __attribute__((unused)) void emit(V nodes,int64_t id,uint8_t *out,size_t *n,unsigned depth){
  if(depth>24||id<0||(uint64_t)id>=nodes->n||*n>1000)omega_fail("Backend graph budget");
  V node=nodes->a[id],op=o_get(node,o_str("op")),args=o_get(node,o_str("args"));
  if(!ov_cmp(op->s,"num")){V value=o_number(o_get(node,o_str("v")));out[(*n)++]=1;memcpy(out+*n,&value->q,16);*n+=16;return;}
@@ -70,6 +70,15 @@ unsigned omega_guided_form(unsigned cycle){
  if(!o_truth(o_get(result,o_str("polynomial_equivalence_checked")))||value->n!=2||ov_cmp(value->a[0]->s,"const")||o_long(value->a[1])!=24)omega_fail("Typed mutation equivalence");
  return form;
 }
+bool omega_cortex_contract(omega_rational_t q){
+ if(!rational_valid(q))return false;
+ used=0;ov_gas=0;V number=ov_new(0);number->q=q;
+ V expression=pair("mul",pair("add",pair("const",number,0),pair("const",o_int(0),0)),pair("const",o_int(1),0));
+ V request=o_obj();o_put(request,o_str("variables"),o_int(1));o_put(request,o_str("rounds"),o_int(4));o_put(request,o_str("max_nodes"),o_int(64));o_put(request,o_str("expression"),expression);
+ V result=omega_egraph(request),value=o_get(result,o_str("value"));
+ return o_truth(o_get(result,o_str("polynomial_equivalence_checked")))&&value->n==2&&!ov_cmp(value->a[0]->s,"const")&&value->a[1]->q.num==q.num&&value->a[1]->q.den==q.den;
+}
+#ifndef OMEGA_LIBRARY
 void _start(void){
  volatile uint64_t *data=(volatile uint64_t *)0x80002000;uint8_t *capsule=(uint8_t *)0x80003000;
  while(!syscall(10,0))__asm__ volatile("pause");
@@ -95,3 +104,5 @@ void _start(void){
  do {incubator_run();}while(syscall(23,0)==0);
  (void)syscall(3,0);omega_fail("Compiler returned after exit");
 }
+
+#endif

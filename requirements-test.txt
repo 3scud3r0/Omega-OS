@@ -1,0 +1,3 @@
+# Host-only numerical/cryptographic references. Never linked to kernel/user ELFs.
+cryptography>=44,<51
+numpy>=1.26,<3
