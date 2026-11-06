@@ -17,6 +17,6 @@ def array(name,data):return 'static const uint8_t '+name+'['+str(len(data))+']={
 header=array('cluster_id',cluster)+array('valid_record',record())+array('invalid_semantics',record(True))
 header+='static const uint8_t public_keys[3][32]={'+','.join('{'+','.join(map(str,k.public_key().public_bytes_raw()))+'}' for k in keys)+'};\n'
 Path('build/consensus_vectors.h').write_text(header)
-subprocess.run(['gcc','-std=c99','-O2','-Wall','-Wextra','-Werror','-pedantic','-ffunction-sections','-fdata-sections','-Iinclude','-Iinclude/crypto','-Ibuild','tests/consensus_harness.c','src/consensus.c','src/crypto/monocypher.c','src/crypto/monocypher-ed25519.c','-Wl,--gc-sections','-o','build/consensus_test'],check=True)
+subprocess.run(['gcc','-std=c99','-O2','-Wall','-Wextra','-Werror','-pedantic','-ffunction-sections','-fdata-sections','-Iinclude','-Iinclude/crypto','-Ibuild','tests/consensus_harness.c','src/consensus.c','src/cortex_pager.c','src/crypto/monocypher.c','src/crypto/monocypher-ed25519.c','-Wl,--gc-sections','-o','build/consensus_test'],check=True)
 subprocess.run(['build/consensus_test'],check=True)
 print('PASS signed-majority certificates: public-key verification, quorum, identity, domain, content and semantic rejection')

@@ -1,7 +1,7 @@
 """Three routed QEMU nodes: native Ring3, bounded evolution, signed majority, SIGKILL."""
 from hardware import *
 from v3_network import Router,checksum
-import hashlib,ipaddress,re,tempfile,threading
+import hashlib,ipaddress,re,tempfile,threading,signal
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 from cluster_config import provision
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -41,10 +41,12 @@ def verify_record(raw,config):
         if mask>>i&1:Ed25519PublicKey.from_public_bytes(module[128+i*80+48:128+i*80+80]).verify(raw[88+i*64:152+i*64],statement)
     return epoch,digest
 
-def main():
-    router=ClusterRouter();configuration=provision(Path(tempfile.mkdtemp(prefix='cluster-',dir='build')))
+def main(provisioner=None,burst_ticks=60000000000):
+    router=ClusterRouter();configuration=provision(Path(tempfile.mkdtemp(prefix='cluster-',dir='build')),burst_ticks)
     images=[Path(f'build/v4-node-{i+1}.img') for i in range(3)]
-    for image in images:create(image,32*1024*1024)
+    for image in images:
+        if provisioner:provisioner(image)
+        else:create(image,32*1024*1024)
     jobs=[];logs={};selector=selectors.DefaultSelector()
     def start(i,label):
         job=launch(images[i],label,network=(i+1,router.ports[i],configuration[i]));jobs.append(job);logs[job[0]]=bytearray();selector.register(job[0].stdout,selectors.EVENT_READ,job);return job
@@ -58,6 +60,17 @@ def main():
                 elif active[0].poll() is not None:selector.unregister(active[0].stdout)
                 assert b'FAIL:' not in logs[active[0]],logs[active[0]].decode(errors='replace')
         assert marker in logs[job[0]],logs[job[0]].decode(errors='replace')
+    def snapshot(active):
+        # Freeze only our own guests while reading their external disk state.
+        # A running semispace GC can otherwise recycle blocks mid-inspection.
+        for job in active:job[0].send_signal(signal.SIGSTOP)
+        try:
+            for job in active:
+                _,status=os.waitpid(job[0].pid,os.WUNTRACED)
+                assert os.WIFSTOPPED(status)
+            return [roots(image)[-1][1][6][1] for image in images]
+        finally:
+            for job in active:job[0].send_signal(signal.SIGCONT)
     try:
         a=start(0,'v4-node-1');until(a,b'QUORUM isolated: lineage epoch remains 0')
         assert 6 not in roots(images[0])[-1][1],'isolated leader published lineage'
@@ -73,7 +86,7 @@ def main():
         c[0].kill();c[0].wait(timeout=5) # actual SIGKILL before its publication
         router.blocked.clear()
         recovered=start(2,'v4-node-3-catchup');until(recovered,b'QUORUM durable lineage epoch=1')
-        records=[roots(image)[-1][1][6][1] for image in images]
+        records=snapshot([a,b,recovered])
         assert len(set(records))==1
         for i,record in enumerate(records):assert verify_record(record,configuration[i])[0]==1
         for job in [a,b,c,recovered]:
@@ -85,7 +98,7 @@ def main():
         restarted=start(2,'v4-node-3-restart');until(restarted,b'QUORUM recovered certified lineage epoch=1')
         assert roots(images[2])[-1][1][6][1]==records[2]
         for job in [a,b,restarted]:until(job,b'QUORUM durable lineage epoch=2')
-        current_records=[roots(image)[-1][1][6][1] for image in images]
+        current_records=snapshot([a,b,restarted])
         assert len(set(current_records))==1
         for i,record in enumerate(current_records):assert verify_record(record,configuration[i])[0]==2
         for job in [a,b,restarted]:until(job,b'INCUBATOR cycles=100 ')

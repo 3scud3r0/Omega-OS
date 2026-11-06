@@ -1,4 +1,6 @@
 #include "runtime.h"
+#include "xstate.h"
+#include "cortex.h"
 #include "mmu.h"
 #include "ipc.h"
 #include "uart.h"
@@ -15,13 +17,15 @@
 #define USER_STACK 0x80001000ULL
 #define USER_DATA 0x80002000ULL
 static struct {
- uint64_t root,data,tx,ticks,calls,fault,address,error,pc_low,pc_high,sp_low,sp_high; interrupt_frame_t saved,guard; omega_rational_t expected; uint64_t jit,jit_length,certificate_size; bool dead,allocated,guarded;
+ uint64_t root,data,tx,ticks,calls,fault,address,error,pc_low,pc_high,sp_low,sp_high; xstate_t vectors; interrupt_frame_t saved,guard; omega_rational_t expected; uint64_t jit,jit_length,certificate_size; bool dead,allocated,guarded;
 } process[TASKS] ALIGN_64;
 static omega_ring_t messages ALIGN_64;
 static unsigned current,completed,preemptions;
 static bool running,mutation_ready,child_started,compiler_reported,child_reported,baseline_ok,incubator_ok;
 static unsigned batch_remaining,batch_finished,peak;
-static bool parked;
+static bool parked,cortex_mode,cortex_done,cortex_probe_done;
+static uint64_t cortex_target;
+static uint8_t cortex_disk_page[4096] ALIGN_4K,verified_kv[32];
 static uint8_t nomination[4096] ALIGN_4K;
 const void *runtime_nomination(void){return incubator_ok?nomination:(void *)0;}
 static void baseline(void);
@@ -57,20 +61,21 @@ static bool choose(interrupt_frame_t *f) {
  unsigned i;
  for(i=1;i<=TASKS;i++) {
   unsigned next=(current+i)%TASKS;
-  if(process[next].allocated&&!process[next].dead) {
+  if(process[next].allocated&&!process[next].dead&&(!cortex_mode||(next==7||next==8))) {
    current=next; memcpy(f,&process[current].saved,sizeof *f);
-   switch_root(process[current].root); return true;
+   switch_root(process[current].root);xstate_restore(&process[current].vectors); return true;
   }
  }
  running=false; smp_timer_stop(); switch_root((uint64_t)boot_pml4); return false;
 }
 uint64_t runtime_trap(interrupt_frame_t *f) {
+ if((f->cs&3)==3)xstate_save(&process[current].vectors);
  if(f->vector==48) {
   smp_timer_eoi();
   if((f->cs&3)!=3) return 0;
   process[current].ticks++; preemptions++;
   memcpy(&process[current].saved,f,sizeof *f);
-  if(process[current].ticks>=(current>=5?3000U:8U)) { process[current].dead=true; completed++; }
+  if(process[current].ticks>=(cortex_mode?600000U:(current>=5?3000U:8U))) { process[current].dead=true; completed++; }
  } else {
   if((f->cs&3)!=3) panic("kernel exception during runtime");
   if(process[current].guarded&&f->rip>=JIT_VA&&f->rip<JIT_VA+process[current].jit_length&&(f->vector==0||f->vector==6||f->vector==13||f->vector==14)){
@@ -79,19 +84,20 @@ uint64_t runtime_trap(interrupt_frame_t *f) {
     * so rollback itself does not masquerade as a subsequent mutation. */
    *mmu_leaf(boot_pml4,(uint64_t)cognitive)&=~PAGE_DIRTY;invlpg((uint64_t)cognitive);
    *mmu_leaf((uint64_t *)process[current].root,0x80004000)&=~PAGE_DIRTY;invlpg(0x80004000);
-   memcpy(f,&process[current].guard,sizeof *f);f->rax=0;process[current].guarded=false;
+   memcpy(f,&process[current].guard,sizeof *f);f->rax=0;process[current].guarded=false;xstate_restore(&process[current].vectors);
    uart_puts("JIT fault rollback parent retained vector=");uart_put_dec(vector);uart_puts("\n");return 0;
   }
   if(baseline_ok&&current==0&&batch_remaining){if(f->vector!=14||process[current].dead||(f->error&7)!=7)panic("JIT RX write fault evidence");uint64_t address;__asm__ volatile("movq %%cr2,%0":"=r"(address));if(address!=JIT_VA)panic("JIT fault address");batch_remaining--;batch_finished++;uart_puts("TEST JIT RX write trapped #PF; child quarantined PASS\n");}
   process[current].fault=f->vector; process[current].error=f->error;
   __asm__ volatile("movq %%cr2,%0":"=r"(process[current].address));
-  uart_puts("PROCESS quarantine id="); uart_put_dec(current+1); uart_puts(" vector="); uart_put_dec(f->vector); uart_puts("\n");
+  uart_puts("PROCESS quarantine id="); uart_put_dec(current+1); uart_puts(" vector="); uart_put_dec(f->vector);uart_puts(" cr2=");uart_put_hex(process[current].address);uart_puts(" rip=");uart_put_hex(f->rip);uart_puts(" err=");uart_put_hex(f->error);uart_puts("\n");
   process[current].dead=true; completed++;
  }
  return choose(f)?0:2;
 }
 uint64_t syscall_dispatch(interrupt_frame_t *f) {
  uint64_t result=~0ULL,value;
+ xstate_save(&process[current].vectors);
  if(!running||(f->cs&3)!=3) panic("syscall outside user runtime");
  if(f->rip<process[current].pc_low||f->rip>=process[current].pc_high||f->rsp<process[current].sp_low||f->rsp>process[current].sp_high) {
   process[current].fault=128; process[current].address=f->rsp;
@@ -121,7 +127,7 @@ uint64_t syscall_dispatch(interrupt_frame_t *f) {
    break;
   case 10: result=mutation_ready;break;
   case 11: /* Seal only the caller's single, private JIT capability. */
-   if(current==5&&f->rdi==JIT_VA&&f->rsi>0&&f->rsi<=4096){
+   if((current==5||(cortex_mode&&current==7))&&f->rdi==JIT_VA&&f->rsi>0&&f->rsi<=4096){
     uint64_t *leaf=mmu_leaf((uint64_t *)process[current].root,JIT_VA);
     uint64_t count;memcpy(&count,(void *)(process[current].tx+8),8);
     if(leaf&&(*leaf&(PAGE_USER|PAGE_WRITE|PAGE_NX))==(PAGE_USER|PAGE_WRITE|PAGE_NX)&&count<=4080&&
@@ -149,7 +155,7 @@ uint64_t syscall_dispatch(interrupt_frame_t *f) {
   case 17:
    if(current==5){if(batch_remaining){f->rax=1;process[current].saved=*f;return choose(f)?0:2;}result=0;}break;
   case 19:
-   if(current==5&&!process[current].guarded){uint64_t *leaf=mmu_leaf((uint64_t *)process[current].root,JIT_VA);if(leaf){*leaf|=PAGE_NX;invlpg(JIT_VA);if(!mmu_identity(process[current].jit,true))panic("JIT rearm identity");*leaf|=PAGE_WRITE;process[current].jit_length=0;result=0;}}break;
+   if((current==5||(cortex_mode&&current==7))&&!process[current].guarded){uint64_t *leaf=mmu_leaf((uint64_t *)process[current].root,JIT_VA);if(leaf){*leaf|=PAGE_NX;invlpg(JIT_VA);if(!mmu_identity(process[current].jit,true))panic("JIT rearm identity");*leaf|=PAGE_WRITE;process[current].jit_length=0;result=0;}}break;
   case 20:
    if(current==5&&baseline_ok&&batch_finished==15){memcpy(nomination,(void *)process[current].tx,4096);incubator_ok=true;result=0;}break;
   case 21:
@@ -181,6 +187,20 @@ uint64_t syscall_dispatch(interrupt_frame_t *f) {
     result=0;
    }
    break;
+  case 40: if(cortex_mode&&current==7)result=cortex_pager_map(f->rdi,f->rsi!=0);break;
+  case 41: if(cortex_mode&&current==7)result=cortex_pager_release(f->rdi)?0:~0ULL;break;
+  case 42:
+   if(cortex_mode&&current==7){cortex_checkpoint_t c;memcpy(&c,(void *)process[current].tx,sizeof c);if(cortex_pager_commit(&c)){memcpy(nomination+CORTEX_MANIFEST_OFFSET,&c,sizeof c);result=0;}}
+   break;
+  case 43:
+   if(cortex_mode){const char *p=(const char *)process[current].tx;for(unsigned k=0;k<256&&p[k];k++)uart_putc(p[k]);uart_puts("\n");result=0;}break;
+  case 49:
+   if(cortex_mode&&current==7&&cluster_config.enabled&&sls_read_page(LINEAGE_VA,cortex_disk_page)&&consensus_certificate((const lineage_record_t *)cortex_disk_page)){memcpy((void *)process[current].tx,cortex_disk_page+280+CORTEX_MANIFEST_OFFSET,sizeof(cortex_checkpoint_t));result=0;}break;
+  case 47:if(cortex_mode&&current==7){cortex_pager_output((void *)process[current].tx);result=0;}break;
+  case 44: result=xstate_features();break;
+  case 45:
+   if(cortex_mode){if(f->rdi)panic("cortex process reported failure");if(current==7){cortex_done=true;const cortex_pager_stats_t *st=cortex_pager_stats();uart_puts("CORTEX pager reads=");uart_put_dec(st->reads);uart_puts(" writes=");uart_put_dec(st->writes);uart_puts(" evictions=");uart_put_dec(st->evictions);uart_puts(" peak=");uart_put_dec(st->peak);uart_puts("\n");}else cortex_probe_done=true;process[current].dead=true;return choose(f)?0:2;}break;
+  case 46: if(cortex_mode){f->rax=0;process[current].saved=*f;return choose(f)?0:2;}break;
   case 60:
    uart_puts("OMEGA USER ERROR: ");
    { const char *text=(const char *)process[current].tx; for(unsigned i=0;i<96&&text[i];i++)uart_putc(text[i]);uart_puts("\n"); }
@@ -191,7 +211,7 @@ uint64_t syscall_dispatch(interrupt_frame_t *f) {
  f->rax=result;
  /* RIP/RFLAGS are never used blindly by SYSRET.
   * Validated low-canonical RIP/RSP permit the SYSRET fast return. */
- f->rflags=(f->rflags&0x8d5ULL)|0x202; return 3;
+ f->rflags=(f->rflags&0x8d5ULL)|0x202;xstate_restore(&process[current].vectors); return 3;
 }
 
 static uint64_t load_elf(unsigned id) {
@@ -216,7 +236,7 @@ static uint64_t load_elf(unsigned id) {
 }
 static void compiler_context(unsigned id,uint64_t role) {
  interrupt_frame_t *f=&process[id].saved;
- process[id].allocated=true;process[id].root=create_root();process[id].data=pmm_alloc_frame();process[id].tx=pmm_alloc_frame();
+ process[id].allocated=true;xstate_reset(&process[id].vectors);process[id].root=create_root();process[id].data=pmm_alloc_frame();process[id].tx=pmm_alloc_frame();
  if(!process[id].data||!process[id].tx)panic("compiler metadata frames");
  *(uint64_t *)process[id].data=role;
  if(!mmu_map((uint64_t *)process[id].root,USER_DATA,process[id].data,PAGE_USER|PAGE_WRITE|PAGE_NX)||
@@ -224,12 +244,12 @@ static void compiler_context(unsigned id,uint64_t role) {
  for(uint64_t va=0x80f00000;va<0x80f10000;va+=4096){uint64_t p=pmm_alloc_frame();if(!p||!mmu_map((uint64_t *)process[id].root,va,p,PAGE_USER|PAGE_WRITE|PAGE_NX))panic("compiler stack");}
  if(id==5&&!mmu_map((uint64_t *)process[id].root,0x80004000,cognitive_phys,PAGE_USER|PAGE_WRITE|PAGE_NX))panic("explicit SLS page capability");
  process[id].sp_low=0x80f00000;process[id].sp_high=0x80f10000;
- if(id==5){process[id].jit=pmm_alloc_frame();if(!process[id].jit||!mmu_map((uint64_t *)process[id].root,JIT_VA,process[id].jit,PAGE_USER|PAGE_WRITE|PAGE_NX))panic("private JIT allocation");}
- f->rip=load_elf(id);f->rsp=process[id].sp_high;f->cs=USER_CS;f->ss=USER_DS;f->rflags=0x202;
+ if(id==5||id==7){process[id].jit=pmm_alloc_frame();if(!process[id].jit||!mmu_map((uint64_t *)process[id].root,JIT_VA,process[id].jit,PAGE_USER|PAGE_WRITE|PAGE_NX))panic("private JIT allocation");}
+ f->rip=load_elf(id);f->rsp=process[id].sp_high-8;f->cs=USER_CS;f->ss=USER_DS;f->rflags=0x202;
 }
 static void native_context(unsigned id,bool original){
  const uint8_t *code;size_t n;uint64_t text,stack;interrupt_frame_t *f;
- memset(&process[id],0,sizeof process[id]);process[id].allocated=true;process[id].root=create_root();
+ memset(&process[id],0,sizeof process[id]);process[id].allocated=true;xstate_reset(&process[id].vectors);process[id].root=create_root();
  process[id].data=pmm_alloc_frame();process[id].tx=pmm_alloc_frame();process[id].jit=pmm_alloc_frame();text=pmm_alloc_frame();stack=pmm_alloc_frame();
  if(!process[id].data||!process[id].tx||!process[id].jit||!text||!stack)panic("native child frame budget");
  code=admission_code(&n);memcpy((void *)text,code,n);memcpy((void *)process[id].jit,(void *)process[5].jit,4096);
@@ -239,20 +259,20 @@ static void native_context(unsigned id,bool original){
  if(!mmu_map((uint64_t *)process[id].root,USER_CODE,text,PAGE_USER)||!mmu_map((uint64_t *)process[id].root,USER_STACK,stack,PAGE_USER|PAGE_WRITE|PAGE_NX)||
  !mmu_map((uint64_t *)process[id].root,USER_DATA,process[id].data,PAGE_USER|PAGE_WRITE|PAGE_NX)||!mmu_map((uint64_t *)process[id].root,USER_DATA+4096,process[id].tx,PAGE_USER|PAGE_WRITE|PAGE_NX)||!mmu_map((uint64_t *)process[id].root,JIT_VA,process[id].jit,PAGE_USER))panic("native spawn mappings");
  process[id].pc_low=USER_CODE;process[id].pc_high=USER_CODE+4096;process[id].sp_low=USER_STACK;process[id].sp_high=USER_DATA;
- f=&process[id].saved;f->rip=USER_CODE;f->rsp=USER_DATA;f->cs=USER_CS;f->ss=USER_DS;f->rflags=0x202;
+ f=&process[id].saved;f->rip=USER_CODE;f->rsp=USER_DATA-8;f->cs=USER_CS;f->ss=USER_DS;f->rflags=0x202;
 }
 static void destroy(unsigned id){
  /* Only dead small agent spaces are reclaimed. The compiler's arena is never
   * inherited. Clear all user aliases before releasing executable frames. */
- uint64_t frames[32];unsigned count=0;uint64_t *root=(uint64_t *)process[id].root,*pdpt=(uint64_t *)(root[0]&0x000ffffffffff000ULL);
+ static uint64_t release[256];memset(release,0,sizeof release);uint64_t *root=(uint64_t *)process[id].root,*pdpt=(uint64_t *)(root[0]&0x000ffffffffff000ULL);
  if(!process[id].dead||id==5)panic("live process reclaim");
  uint64_t *pd=(uint64_t *)(pdpt[2]&0x000ffffffffff000ULL);
  for(unsigned a=0;a<512;a++)if(pd[a]&1){uint64_t *pt=(uint64_t *)(pd[a]&0x000ffffffffff000ULL);
-  for(unsigned b=0;b<512;b++)if(pt[b]&1){uint64_t p=pt[b]&0x000ffffffffff000ULL;bool seen=false;pt[b]=0;for(unsigned j=0;j<count;j++)if(frames[j]==p)seen=true;if(!seen){if(count==32)panic("child memory quota");frames[count++]=p;}}
+  for(unsigned b=0;b<512;b++)if(pt[b]&1){uint64_t p=pt[b]&0x000ffffffffff000ULL;pt[b]=0;if(p>=PHYS_LIMIT)panic("user frame range");release[p/4096/64]|=1ULL<<(p/4096%64);}
   if(!pmm_free_frame((uint64_t)pt))panic("child PT release");
  }
  if(!pmm_free_frame((uint64_t)pd)||!pmm_free_frame((uint64_t)pdpt)||!pmm_free_frame((uint64_t)root))panic("child tables release");
- for(unsigned j=0;j<count;j++)if(!pmm_free_frame(frames[j]))panic("child page release");
+ for(unsigned w=0;w<256;w++)while(release[w]){unsigned bit=(unsigned)__builtin_ctzll(release[w]);release[w]&=release[w]-1;if(!pmm_free_frame((w*64ULL+bit)*4096))panic("child page release");}
  memset(&process[id],0,sizeof process[id]);process[id].dead=true;
 }
 static void spawn_child(const void *capsule,size_t n){
@@ -277,7 +297,7 @@ bool runtime_run(void) {
  for(i=0;i<5;i++) {
   uint64_t text=pmm_alloc_frame(),stack=pmm_alloc_frame(); interrupt_frame_t *f=&process[i].saved;
   process[i].pc_low=USER_CODE;process[i].pc_high=USER_CODE+4096;process[i].sp_low=USER_STACK;process[i].sp_high=USER_DATA;
-  process[i].allocated=true;process[i].dead=false;process[i].root=create_root(); process[i].data=pmm_alloc_frame(); process[i].tx=pmm_alloc_frame();
+  xstate_reset(&process[i].vectors);process[i].allocated=true;process[i].dead=false;process[i].root=create_root(); process[i].data=pmm_alloc_frame(); process[i].tx=pmm_alloc_frame();
   if(!text||!stack||!process[i].data||!process[i].tx) panic("process memory exhausted");
   memcpy((void *)text,code,size); *(uint64_t *)process[i].data=i;
   if(!mmu_map((uint64_t *)process[i].root,USER_CODE,text,PAGE_USER)||
@@ -287,7 +307,7 @@ bool runtime_run(void) {
   if(i==0&&requested_size){memcpy((void *)process[0].tx,requested_source,requested_size);((uint64_t *)process[0].data)[21]=requested_size;}
   /* Only process 0 can read this marker; process 2's access must fault. */
   if(i==0&&!mmu_map((uint64_t *)process[i].root,0x90000000,process[i].data,PAGE_USER|PAGE_NX)) panic("private marker");
-  f->rip=USER_CODE; f->rsp=USER_DATA; f->cs=USER_CS; f->ss=USER_DS; f->rflags=0x202;
+  f->rip=USER_CODE; f->rsp=USER_DATA-8; f->cs=USER_CS; f->ss=USER_DS; f->rflags=0x202;
  }
  {uint64_t p=pmm_alloc_frame();if(!p||!mmu_map(boot_pml4,(uint64_t)cognitive,p,PAGE_WRITE))panic("cognitive SLS frame");cognitive_phys=p;(void)sls_register((uint64_t)cognitive);}
  compiler_image=admission_compiler(&compiler_size);compiler_context(5,5);process[5].dead=false;
@@ -296,7 +316,7 @@ bool runtime_run(void) {
  wrmsr(0xc0000082,(uint64_t)syscall_entry); wrmsr(0xc0000084,0x47700);
  { uint32_t lo,hi; __asm__ volatile("rdmsr":"=a"(lo),"=d"(hi):"c"(0xc0000080)); wrmsr(0xc0000080,((uint64_t)hi<<32)|lo|1); }
  running=true; current=0; switch_root(process[0].root); smp_timer_start();
- runtime_enter(&process[0].saved);
+ xstate_restore(&process[0].vectors);runtime_enter(&process[0].saved);
  if(!compiler_reported||!child_reported||!child_started){
   (void)sls_restore((uint64_t)cognitive);
   uart_puts("ADMISSION rejected mutation; kernel retained prior SLS checkpoint\n");return false;
@@ -306,9 +326,30 @@ bool runtime_run(void) {
  uart_puts("TEST native JIT W^X + 16 isolated processes + incubation PASS\n");
  uart_puts("SYSCALL runtime total TSC ticks="); uart_put_dec(rdtsc()-start); uart_puts("\n");return true;
 }
+bool runtime_cortex(void){
+ const uint8_t *saved_image=compiler_image;size_t saved_size=compiler_size;
+ compiler_image=admission_cortex(&compiler_size);cortex_mode=true;cortex_done=false;cortex_probe_done=false;
+ for(unsigned id=7;id<=8;id++){if(process[id].allocated)destroy(id);memset(&process[id],0,sizeof process[id]);compiler_context(id,id);((uint64_t *)process[id].data)[30]=cortex_target;process[id].dead=false;}
+ cortex_pager_begin(process[7].root);current=7;running=true;switch_root(process[7].root);smp_timer_start();xstate_restore(&process[7].vectors);runtime_enter(&process[7].saved);
+ cortex_pager_end();cortex_mode=false;compiler_image=saved_image;compiler_size=saved_size;
+ if(!cortex_done||!cortex_probe_done){uart_puts("CORTEX task quarantined; kernel retained prior checkpoint\n");return false;}
+ uart_puts("TEST cortex Ring3 + isolated x87/SSE/AVX syscall/preemption contexts PASS\n");return true;
+}
+bool runtime_cortex_ensure(const cortex_checkpoint_t *c){
+ if(!c->magic)return true;
+ if(!cortex_checkpoint_valid(c)||!sls_read_page(0x41000000,cortex_disk_page)||crypto_verify32(c->model_hash,cortex_disk_page+24))return false;
+ cortex_checkpoint_t local;
+ if(!sls_read_page(0x41001000,cortex_disk_page))return false;
+ memcpy(&local,cortex_disk_page,sizeof local);
+ if(local.position<c->position){cortex_target=c->position;bool ok=runtime_cortex();cortex_target=0;if(!ok)return false;}
+ if(!crypto_verify32(verified_kv,c->kv_hash))return true;
+ crypto_blake2b_ctx h;crypto_blake2b_init(&h,32);uint64_t dim=(uint64_t)c->dim*c->kv_heads/c->heads,stride=(c->context*dim*4+4095)/4096;
+ for(unsigned layer=0;layer<c->layers;layer++){uint64_t bytes=c->position*dim*4;crypto_blake2b_update(&h,(uint8_t *)&layer,4);crypto_blake2b_update(&h,(uint8_t *)&bytes,8);for(uint64_t offset=0;offset<bytes;offset+=4096){if(!sls_read_page(0x40000000ULL+(CORTEX_KV+layer*stride+offset/4096)*4096,cortex_disk_page))return false;crypto_blake2b_update(&h,cortex_disk_page,(size_t)(bytes-offset<4096?bytes-offset:4096));}}
+ uint8_t digest[32];crypto_blake2b_final(&h,digest);if(crypto_verify32(digest,c->kv_hash))return false;memcpy(verified_kv,digest,32);return true;
+}
 void runtime_resume(void){
  if(!parked||!process[5].allocated||process[5].dead)panic("incubator continuation");
- parked=false;current=5;process[5].ticks=0;running=true;switch_root(process[5].root);smp_timer_start();runtime_enter(&process[5].saved);
+ parked=false;current=5;process[5].ticks=0;running=true;switch_root(process[5].root);smp_timer_start();xstate_restore(&process[5].vectors);runtime_enter(&process[5].saved);
  if(!parked||!incubator_ok||batch_remaining)panic("incubator resume completion");
  uart_puts("INCUBATOR persistent Ring3 process completed another 50-cycle burst\n");
 }

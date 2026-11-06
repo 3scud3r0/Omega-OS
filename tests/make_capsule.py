@@ -28,3 +28,12 @@ message=b'OMEGA-COMPILER3\0'+struct.pack('<II',len(compiler),len(vm))+compiler+v
 run(['openssl','pkeyutl','-sign','-rawin','-inkey',str(key),'-in','build/compiler.msg','-out','build/compiler.sig'])
 with (b/'capsule.h').open('a') as f:
  f.write(c_array('compiler_signature',(b/'compiler.sig').read_bytes())+c_array('compiler_message',message))
+
+cortex=(b/'cortex.elf').read_bytes()
+assert len(cortex)<=1024*1024
+message=b'OMEGA-CORTEX-1\0\0'+struct.pack('<II',len(cortex),len(vm))+cortex+vm
+assert len(message)==24+len(cortex)+len(vm)
+(b/'cortex.msg').write_bytes(message)
+run(['openssl','pkeyutl','-sign','-rawin','-inkey',str(key),'-in','build/cortex.msg','-out','build/cortex.sig'])
+with (b/'capsule.h').open('a') as f:
+ f.write(c_array('cortex_signature',(b/'cortex.sig').read_bytes())+c_array('cortex_message',message))

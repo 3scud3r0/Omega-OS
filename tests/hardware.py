@@ -5,12 +5,16 @@ QEMU=sys.argv[1] if len(sys.argv)>1 else 'qemu-system-x86_64'
 MASK=(1<<64)-1
 MAGIC=0x324f4d454741534c
 
+CRC_TABLE=[]
+for byte in range(256):
+    value=byte<<56
+    for bit in range(8):value=((value<<1)^(0x42f0e1eba9ea3693 if value>>63 else 0))&MASK
+    CRC_TABLE.append(value)
 def crc(data):
-    c=0
-    for b in data:
-        c^=b<<56
-        for _ in range(8): c=((c<<1)^(0x42f0e1eba9ea3693 if c>>63 else 0))&MASK
-    return c
+    value=0
+    for byte in data:value=CRC_TABLE[(value>>56)^byte]^((value<<8)&MASK)
+    return value
+assert crc(b'123456789')==0x6c40df5f0b497347
 
 def roots(image):
     candidates=[]

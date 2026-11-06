@@ -19,7 +19,14 @@ static uint32_t transfer_length;
 static bool finish(void) {
  uint64_t start=rdtsc(); bool ok=false;
  while(!virtio_blk_poll(&ok)) {
-  if(rdtsc()-start>10000000000ULL) { failed=true; panic("VirtIO timeout: DMA buffers retained"); }
+  if(rdtsc()-start>120000000000ULL) {
+   /* A bounded storage deadline, not a CPU quantum: synchronous FLUSH can
+    * stall on shared backing media. Never recycle outstanding DMA buffers. */
+   failed=true;uart_puts("VirtIO stalled type=");uart_put_dec(request.type);
+   uart_puts(" sector=");uart_put_dec(request.sector);uart_puts(" avail=");uart_put_dec(available->idx);
+   uart_puts(" used=");uart_put_dec(used->idx);uart_puts(" consumed=");uart_put_dec(last_used);uart_puts("\n");
+   panic("VirtIO timeout: DMA buffers retained");
+  }
   cpu_pause();
  }
  return ok;
